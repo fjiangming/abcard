@@ -1,0 +1,33 @@
+{
+  "mail": {
+    "worker_domain": "https://apimail.mkai.de5.net",
+    "admin_token": "ma123999",
+    "email_domain": "mkai.de5.net"
+  },
+  "card": {
+    "number": "",
+    "cvc": "",
+    "exp_month": "",
+    "exp_year": ""
+  },
+  "billing": {
+    "name": "Taro Yamada",
+    "email": "",
+    "country": "JP",
+    "currency": "JPY",
+    "address_line1": "1-1-1 Shibuya",
+    "address_state": "Tokyo"
+  },
+  "team_plan": {
+    "plan_name": "chatgptteamplan",
+    "workspace_name": "Artizancloud",
+    "price_interval": "month",
+    "seat_quantity": 5,
+    "promo_campaign_id": "team1dollar"
+  },
+  "proxy": null,
+  "session_token": null,
+  "access_token": null,
+  "device_id": null,
+  "stripe_build_hash": "f197c9c0f0"
+}

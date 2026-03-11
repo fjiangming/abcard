@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试输出 (包含敏感凭证)
+test_outputs/
+logs/
+
+# 配置 (包含密钥)
+config.json
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# 临时测试文件
+test_confirm_only.py
+outputs/
