@@ -122,14 +122,16 @@ def _parse_card_text(text: str) -> dict:
                     parts.pop(idx)
                     break
 
-            if len(parts) >= 1:
+            # 解析: 第一段=街道, 第二段=城市(州/省), 后续合并
+            if len(parts) == 1:
                 result["address_line1"] = parts[0]
-            if len(parts) >= 2:
+            elif len(parts) == 2:
+                result["address_line1"] = parts[0]
                 result["address_state"] = parts[1]
-            # 更多部分合并到 address_line1
-            if len(parts) >= 3:
-                result["address_line1"] = ", ".join(parts[:-1])
-                result["address_state"] = parts[-1]
+            elif len(parts) >= 3:
+                # 例: Langley House, London, England → line1=Langley House, state=London
+                result["address_line1"] = parts[0]
+                result["address_state"] = parts[1]  # 城市作为州/省
 
     return result
 
@@ -331,7 +333,7 @@ with cfg_col2:
         postal_code = bc5.text_input("邮编", value=_p_zip or default_zip)
 
 if do_payment:
-    with st.expander("� 粘贴卡片信息 (自动识别)", expanded=False):
+    with st.expander("粘贴卡片信息 (自动识别)", expanded=False):
         paste_text = st.text_area(
             "粘贴卡片/账单文本",
             height=150,
@@ -377,7 +379,7 @@ if do_payment:
                 st.warning("未能识别卡片信息，请检查文本格式")
             st.rerun()
 
-    with st.expander("�💳 信用卡 ⚠️ Live 模式 - 真实扣款", expanded=True):
+    with st.expander(" 信用卡 ⚠️ Live 模式 - 真实扣款", expanded=True):
         TEST_CARDS = {
             "4242 4242 4242 4242 (Visa 标准)": ("4242424242424242", "123"),
             "4000 0000 0000 0002 (Visa 被拒)": ("4000000000000002", "123"),
@@ -523,8 +525,8 @@ with tab_run:
             auth_result = None
             af = None
 
-            # ── 注册 ──
-            if do_register:
+            # ── 注册/凭证 ──
+            if do_register and not use_existing_creds:
                 node_status["mail"] = "running"; _refresh()
                 mp = MailProvider(worker_domain=cfg.mail.worker_domain, admin_token=cfg.mail.admin_token, email_domain=cfg.mail.email_domain)
                 node_status["mail"] = "done"
@@ -539,7 +541,7 @@ with tab_run:
                 store.append_credentials_csv(auth_result.to_dict())
                 pull_captured_logs()
                 log_area.code("\n".join(st.session_state.log_buffer[-60:]), language="log")
-            elif do_checkout and use_existing_creds:
+            elif use_existing_creds and do_checkout:
                 # 跳过注册，直接使用已有凭证
                 if not cred_session_token or not cred_access_token:
                     raise RuntimeError("跳过注册时必须提供 session_token 和 access_token")
