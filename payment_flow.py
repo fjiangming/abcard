@@ -347,14 +347,12 @@ class PaymentFlow:
     # ── Step 3.7: 获取支付页面详情 (expected_amount) ──
     def fetch_payment_page_details(self, checkout_session_id: str) -> int:
         """
-        POST /v1/payment_pages/{checkout_session_id}
-        获取支付页面详情，提取 expected_amount
+        GET /v1/elements/sessions 获取支付 session 详情，提取 expected_amount
         """
-        logger.info("[支付 3.7/5] 获取支付页面详情...")
+        logger.info("[支付 3.7/5] 获取支付 session 详情 (expected_amount)...")
 
         headers = {
             "Authorization": f"Bearer {self.stripe_pk}",
-            "Content-Type": "application/x-www-form-urlencoded",
             "Accept": "application/json",
             "Origin": "https://js.stripe.com",
             "Referer": "https://js.stripe.com/",
@@ -364,27 +362,49 @@ class PaymentFlow:
             ),
         }
 
-        url = f"https://api.stripe.com/v1/payment_pages/{checkout_session_id}"
-        resp = self.session.post(url, headers=headers, data={}, timeout=30)
+        # 从 checkout_data 获取 client_secret
+        client_secret = self.checkout_data.get("client_secret", "")
 
         amount = 0
-        if resp.status_code == 200:
-            data = resp.json()
-            # 尝试多个可能字段
-            amount = (
-                data.get("amount")
-                or data.get("amount_total")
-                or data.get("total", {}).get("amount", 0)
-                if isinstance(data.get("total"), dict) else data.get("amount", 0)
+
+        # 尝试 elements/sessions
+        if client_secret:
+            params = {
+                "client_secret": client_secret,
+                "type": "payment",
+            }
+            resp = self.session.get(
+                "https://api.stripe.com/v1/elements/sessions",
+                headers=headers,
+                params=params,
+                timeout=30,
             )
-            logger.info(f"Expected amount from payment page: {amount}")
-            logger.debug(f"Payment page 返回字段: {list(data.keys())}")
-        else:
-            logger.warning(f"获取支付页面详情失败 ({resp.status_code}), 使用默认 expected_amount=0")
-            try:
-                logger.debug(f"Payment page 错误: {resp.text[:300]}")
-            except Exception:
-                pass
+            if resp.status_code == 200:
+                data = resp.json()
+                logger.debug(f"elements/sessions 返回字段: {list(data.keys())}")
+
+                # 尝试各种可能的金额字段
+                if "total" in data:
+                    total = data["total"]
+                    amount = total.get("amount", 0) if isinstance(total, dict) else 0
+                elif "amount_total" in data:
+                    amount = data["amount_total"]
+                elif "amount" in data:
+                    amount = data["amount"]
+
+                # 从 line_items 或 payment_method_options 中获取
+                if not amount and "line_items" in data:
+                    items = data.get("line_items", {}).get("data", [])
+                    for item in items:
+                        amount += item.get("amount_total", 0) or item.get("amount", 0)
+
+                logger.info(f"Expected amount: {amount}")
+            else:
+                logger.warning(f"elements/sessions 返回 {resp.status_code}")
+                try:
+                    logger.debug(f"elements/sessions 错误: {resp.text[:300]}")
+                except Exception:
+                    pass
 
         self._expected_amount = str(amount) if amount else "0"
         return amount
