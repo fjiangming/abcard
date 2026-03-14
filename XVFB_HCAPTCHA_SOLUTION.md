@@ -1,168 +1,330 @@
-# Xvfb + 自动点击方案 - 绕过 Stripe hCaptcha
+# ChatGPT Business 自动开通方案
 
 ## 方案概述
 
-在服务器/无头环境下，通过 **Xvfb 虚拟显示 + SwiftShader 软件 GPU + 自动点击 hCaptcha checkbox** 实现 Stripe 支付时 hCaptcha 自动通过。
+通过 **API 注册 + Xvfb 虚拟显示 + Playwright CDP + Stripe 自动填表 + hCaptcha 自动点击** 实现 ChatGPT Business 套餐全自动开通。
 
-**成功率**: 4/4 (100%) 测试全部通过  
-**平均耗时**: ~5-9 秒（从 handleNextAction 开始到完成）
+**首月免费**: 使用 `team-1-month-free` 促销码，5 席位首月 US$0.00  
+**成功率**: hCaptcha 自动点击 100% 通过（SwiftShader 环境）  
+**全流程耗时**: ~60-90 秒
 
-## 原理
+---
 
-### hCaptcha 双层检测
+## 完整流程
 
-Stripe 使用两层 hCaptcha：
+```
++===========================================================================+
+|                        ChatGPT Business 自动开通流程                        |
++===========================================================================+
 
-1. **Invisible hCaptcha** (sitekey: `463b917e-...`)
-   - 页面加载时自动运行
-   - 检查浏览器指纹（GPU、Canvas、WebGL 等）
-   - 真实显示 + GPU → 自动通过
-   - Xvfb/Headless → **失败**
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Phase 1: 账号注册 (API)                                           │
+  │                                                                     │
+  │  MailProvider ──> 创建临时邮箱 (mkai.de5.net)                       │
+  │       │                                                             │
+  │       v                                                             │
+  │  AuthFlow.run_register()                                            │
+  │    1. CSRF Token                                                    │
+  │    2. OAuth 授权地址                                                │
+  │    3. OAuth 初始化 ──> device_id                                    │
+  │    4. Sentinel Token                                                │
+  │    5. 提交注册邮箱                                                  │
+  │    6. 发送 OTP ──> 邮箱接收                                         │
+  │    7. 验证 OTP                                                      │
+  │    8. 创建账户                                                      │
+  │    9. 重定向链                                                      │
+  │   10. 获取 session_token + access_token                             │
+  │                                                                     │
+  │  输出: email, session_token, access_token, device_id                │
+  └─────────────────────────┬───────────────────────────────────────────┘
+                            │
+                            v
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Phase 2: 创建 Checkout Session (API)                               │
+  │                                                                     │
+  │  POST /backend-api/payments/checkout                                │
+  │  ┌─────────────────────────────────────────┐                        │
+  │  │ {                                       │                        │
+  │  │   "plan_name": "chatgptteamplan",       │                        │
+  │  │   "team_plan_data": {                   │                        │
+  │  │     "workspace_name": "...",            │                        │
+  │  │     "price_interval": "month",          │                        │
+  │  │     "seat_quantity": 5                  │                        │
+  │  │   },                                    │                        │
+  │  │   "billing_details": {                  │                        │
+  │  │     "country": "US",                    │                        │
+  │  │     "currency": "USD"                   │                        │
+  │  │   },                                    │                        │
+  │  │   "promo_campaign": {                   │                        │
+  │  │     "promo_campaign_id":                │  <── 关键！免费试用     │
+  │  │       "team-1-month-free",              │                        │
+  │  │     "is_coupon_from_query_param": false  │                        │
+  │  │   },                                    │                        │
+  │  │   "checkout_ui_mode": "custom"          │                        │
+  │  │ }                                       │                        │
+  │  └─────────────────────────────────────────┘                        │
+  │                                                                     │
+  │  返回: checkout_session_id, publishable_key, client_secret          │
+  │                                                                     │
+  │  Checkout 页面定价:                                                 │
+  │    小计:    US$150.00  (5 x $30/席位/月)                            │
+  │    折扣:  -US$150.00  (US$150.00 优惠，持续 1 个月)                 │
+  │    应付:    US$0.00    ✅                                           │
+  └─────────────────────────┬───────────────────────────────────────────┘
+                            │
+                            v
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  Phase 3: 浏览器支付 (Playwright CDP + Xvfb + SwiftShader)         │
+  │                                                                     │
+  │  3a. 启动 Chrome (有头模式 on Xvfb)                                │
+  │      Chrome 145 + SwiftShader + Proxy                               │
+  │      CDP connect_over_cdp (navigator.webdriver = false)             │
+  │                                                                     │
+  │  3b. Cloudflare 通关                                                │
+  │      GET chatgpt.com/ ──> 等待 title != "请稍候"                    │
+  │                                                                     │
+  │  3c. 加载 Checkout 页面                                             │
+  │      GET /checkout/openai_llc/{cs_id}                               │
+  │      等待 Stripe Payment Element + Address Element 加载             │
+  │                                                                     │
+  │  3d. 填写卡片信息 (Stripe Payment iframe)                          │
+  │      ┌──────────────────────────────────────┐                       │
+  │      │  iframe: elements-inner-payment      │                       │
+  │      │  ┌────────────────────────────────┐  │                       │
+  │      │  │ Card number  [4242...4242]     │  │ ← y+25 点击 + 键盘   │
+  │      │  ├────────────────┬───────────────┤  │                       │
+  │      │  │ MM/YY [03/32]  │ CVC [667]     │  │ ← Stripe 自动跳转    │
+  │      │  └────────────────┴───────────────┘  │                       │
+  │      └──────────────────────────────────────┘                       │
+  │      方法: page.mouse.click(绝对坐标) + page.keyboard.type()       │
+  │      Stripe 自动在卡号完成后跳到过期日，过期日后跳到 CVC             │
+  │                                                                     │
+  │  3e. 填写账单地址 (Stripe Address iframe)                          │
+  │      ┌──────────────────────────────────────┐                       │
+  │      │  iframe: elements-inner-address      │                       │
+  │      │  可见: name, addressLine1            │ ← 绝对坐标点击 + 键盘 │
+  │      │  隐藏: city, state, zip              │ ← frame.evaluate()    │
+  │      │        (超出 iframe 可视区域)        │   nativeInputValueSetter│
+  │      └──────────────────────────────────────┘                       │
+  │                                                                     │
+  │  3f. 提交支付                                                       │
+  │      button[type="submit"].click()                                  │
+  │                                                                     │
+  │  3g. hCaptcha 自动处理                                              │
+  │      Stripe handleNextAction() 触发 hCaptcha                       │
+  │      ┌─────────────────────────────────────┐                        │
+  │      │ checkout.stripe.com                 │                        │
+  │      │  └─ js.stripe.com/hcaptcha-inner    │                        │
+  │      │     └─ stripecdn.com/HCaptcha       │                        │
+  │      │        └─ newassets.hcaptcha.com     │                        │
+  │      │           └─ #checkbox ← 自动点击 ✅│                        │
+  │      └─────────────────────────────────────┘                        │
+  │      SwiftShader 让 checkbox 点击通过 (无 challenge 图片验证)       │
+  │                                                                     │
+  │  3h. 等待结果                                                       │
+  │      成功: "订阅已激活" / "Thank you" / URL 跳转                    │
+  │      失败: "Card declined" / "支付被拒"                             │
+  └─────────────────────────────────────────────────────────────────────┘
+```
 
-2. **Visible Checkbox** (sitekey: `c7faac4c-...`)
-   - 仅当 Invisible 检测失败时出现
-   - 在 `handleNextAction()` 期间创建
-   - 嵌套在深层 iframe 中：
-     ```
-     checkout.stripe.com
-     └─ js.stripe.com/v3/hcaptcha-inner-*.html
-        └─ b.stripecdn.com/HCaptcha.html
-           └─ newassets.hcaptcha.com/#frame=checkbox  ← 这里有 checkbox
-           └─ newassets.hcaptcha.com/#frame=challenge
-     ```
+---
 
-### 为什么方案有效
+## 技术细节
 
-- **SwiftShader** 让 Chrome 有软件 WebGL，浏览器指纹更接近真实
-- **Xvfb 有头模式** 没有 `HeadlessChrome` UA 标记
-- **自动点击** checkbox 在 invisible 检测失败后的备用验证中通过
-- CDP 连接方式 (`connect_over_cdp`) 让 `navigator.webdriver = false`
+### 促销码对照
+
+| 促销 ID | 效果 | 来源 |
+|---------|------|------|
+| `team-1-month-free` | **首月 $0** (官方免费试用) | 浏览器 "领取免费试用" 按钮 ✅ |
+| `team0dollar` | ~~无效~~ (旧版，不再生效) | 旧代码/URL 参数 ❌ |
+| `business_free_trial` | 定价配置中显示 enabled | 未被前端使用 ❌ |
+
+### 定价配置 (US)
+
+来自 `/backend-api/checkout_pricing_config/configs/US`:
+```json
+{
+  "business": {
+    "month": {"amount": 30.0, "tax": "exclusive"},
+    "year":  {"amount": 25.0, "tax": "exclusive"}
+  },
+  "promos": {
+    "business_free_trial": {"enabled": true, "amount": 0.0},
+    "business_one_dollar": {"enabled": true, "amount": 1.0}
+  }
+}
+```
+
+### Stripe iframe 填写技术
+
+**卡片填写** (Payment Element):
+- iframe URL: `js.stripe.com/v3/elements-inner-payment-*.html`
+- 布局: 卡号在上 (y=4-74), 过期日/CVC 在下 (y=86)
+- 方法: 点击 `(iframe_x+80, iframe_y+25)` → 键盘输入 → Stripe 自动跳转
+- **不要用 Tab** — Stripe 在卡号完成后自动跳到下一个字段
+
+**地址填写** (Address Element):
+- iframe URL: `js.stripe.com/v3/elements-inner-address-*.html`
+- 可见字段: name, addressLine1 → 绝对坐标点击 + `page.keyboard.type()`
+- 隐藏字段: city/state/zip → `frame.evaluate()` + `nativeInputValueSetter`
+- iframe 高度仅 243px，但 city/state/zip 在 y=334-416 处 (超出可视区)
+
+### hCaptcha 绕过原理
+
+```
+                    ┌─────────────────┐
+                    │  Stripe Payment │
+                    │  handleNextAction│
+                    └────────┬────────┘
+                             │
+                    ┌────────v────────┐
+                    │  Invisible      │
+                    │  hCaptcha       │
+                    │  (自动评估)     │
+                    └────────┬────────┘
+                             │
+                     检测浏览器指纹
+                     GPU / Canvas / WebGL
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+         [真实 GPU]                 [SwiftShader/Xvfb]
+              │                             │
+         自动通过                    Invisible 失败
+              │                             │
+              │                    ┌────────v────────┐
+              │                    │  Visible        │
+              │                    │  Checkbox       │
+              │                    │  出现           │
+              │                    └────────┬────────┘
+              │                             │
+              │                    自动点击 checkbox
+              │                             │
+              │                    ┌────────v────────┐
+              │                    │  Challenge?     │
+              │                    └────────┬────────┘
+              │                             │
+              │                    SwiftShader 环境
+              │                    指纹够好 → 无 challenge
+              │                             │
+              └──────────────┬──────────────┘
+                             │
+                    ┌────────v────────┐
+                    │  hCaptcha 通过  │
+                    │  Stripe 继续    │
+                    └─────────────────┘
+```
+
+---
 
 ## 环境要求
 
 ```bash
-# 安装 Xvfb
+# Xvfb 虚拟显示
 sudo apt-get install -y xvfb
 
-# Chrome for Testing (Playwright 自带)
-~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome
+# Chrome for Testing (Playwright 内置)
+~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome  # Chrome 145
 
 # Python 依赖
-pip install playwright
+pip install playwright curl_cffi
+
+# 代理 (US IP 必需)
+http://proxy:port  # 必须是美国 IP
 ```
+
+### Chrome 启动参数
+
+```
+--use-gl=angle                    # ANGLE GL
+--use-angle=swiftshader-webgl     # SwiftShader 软件 WebGL
+--enable-unsafe-swiftshader       # 允许 SwiftShader
+--no-sandbox                      # WSL/容器环境
+--remote-debugging-port=PORT      # CDP 连接
+--proxy-server=http://proxy:port  # 代理
+--window-size=1920,1080           # 窗口大小
+```
+
+**不要使用**:
+- `--headless=new` — HeadlessChrome UA 被检测
+- `--disable-gpu` — 禁用 WebGL 降低指纹质量
+
+---
 
 ## 使用方法
 
-### 1. 启动 Xvfb
-
-```bash
-# 启动虚拟显示 (1920x1080, 24位色深)
-Xvfb :99 -screen 0 1920x1080x24 -ac &
-
-# 验证
-DISPLAY=:99 xdpyinfo | head -5
-```
-
-### 2. 运行支付测试
-
-```bash
-# 在 Xvfb 上运行 (不加 --headless，以有头模式运行)
-DISPLAY=:99 python3 test_browser_payment.py
-
-# 对比：纯 headless（会被 hCaptcha 检测）
-python3 test_browser_payment.py --headless
-```
-
-### 3. 集成到自动化
+### Quick Start
 
 ```python
+import os, subprocess
 from browser_payment import BrowserPayment
+from auth_flow import AuthFlow
+from mail_provider import MailProvider
+from config import Config
 
-bp = BrowserPayment(
-    proxy="http://proxy:port",
-    headless=False,  # 重要：不用 headless，用 Xvfb 代替
-    slow_mo=80,
-)
+# 1. 启动 Xvfb
+subprocess.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-ac"])
+os.environ["DISPLAY"] = ":99"
 
-# 确保 DISPLAY=:99（Xvfb）
+# 2. 注册账号
+cfg = Config()
+cfg.proxy = "http://proxy:port"
+af = AuthFlow(config=cfg)
+mp = MailProvider(cfg.mail.worker_domain, cfg.mail.admin_token, cfg.mail.email_domain)
+auth = af.run_register(mp)
+
+# 3. 运行支付
+bp = BrowserPayment(proxy=cfg.proxy, headless=False, slow_mo=80)
 result = bp.run_full_flow(
-    session_token=...,
-    access_token=...,
-    card_number=...,
-    # ...
+    session_token=auth.session_token,
+    access_token=auth.access_token,
+    device_id=auth.device_id,
+    card_number="4242424242424242",
+    card_exp_month="03",
+    card_exp_year="32",
+    card_cvc="123",
+    billing_name="John Doe",
+    billing_country="US",
+    billing_zip="63640",
+    billing_line1="863 Potosi Street",
+    billing_city="Farmington",
+    billing_state="MO",
+    billing_currency="USD",
+    workspace_name="MyWorkspace",
+    chatgpt_proxy=cfg.proxy,
 )
+
+print(f"Success: {result['success']}")
 ```
 
-## Chrome 启动参数
+### Streamlit UI
 
-关键参数（已集成到 `browser_payment.py`）：
-
-```
---use-gl=angle                    # 使用 ANGLE GL
---use-angle=swiftshader-webgl     # SwiftShader WebGL
---enable-unsafe-swiftshader       # 允许 SwiftShader
---no-sandbox                      # 容器/WSL 环境
---remote-debugging-port=PORT      # CDP 连接
+```bash
+DISPLAY=:99 streamlit run ui.py --server.port 8503
 ```
 
-**不要使用**：
-- `--headless=new` — 会被 hCaptcha 检测 UA 中的 HeadlessChrome
-- `--disable-gpu` — 会禁用 WebGL，降低浏览器指纹质量
+---
 
-## 自动点击实现
+## 关键文件
 
-`_try_click_hcaptcha()` 使用 Playwright 的 `page.frames` 遍历所有嵌套 iframe：
+| 文件 | 功能 |
+|------|------|
+| `browser_payment.py` | 核心: Checkout 创建 + 浏览器支付 + hCaptcha |
+| `auth_flow.py` | API 注册账号 (10 步) |
+| `mail_provider.py` | 临时邮箱 + OTP 接收 |
+| `config.py` | 配置: 邮箱/卡片/账单/代理 |
+| `ui.py` | Streamlit Web UI |
+| `http_client.py` | curl_cffi HTTP 客户端 |
 
-```python
-for frame in page.frames:
-    if "newassets.hcaptcha.com" in frame.url and "frame=checkbox&" in frame.url:
-        checkbox = frame.query_selector('#checkbox')
-        checkbox.click()
-```
-
-监控循环每 0.5 秒检查一次，通常在 handleNextAction 启动后 2 秒内检测到 checkbox。
-
-## 测试结果
-
-| 环境 | hCaptcha 结果 | 说明 |
-|------|-------------|------|
-| DISPLAY=:0 (真实显示) | 需手动点击 | Invisible 检测可能通过，但不稳定 |
-| DISPLAY=:99 (Xvfb + SwiftShader) | **自动通过** | Invisible 失败 → checkbox 自动点击 |
-| `--headless=new` | 超时 | 被 HeadlessChrome UA 检测 |
-| `--headless=new` + UA 覆盖 | 超时 | hCaptcha 仍可通过其他方式检测 |
-| YesCaptcha 打码 | 失败 | Enterprise hCaptcha IP 绑定，token 被拒 |
+---
 
 ## 故障排除
 
-### checkbox 未被检测到
-- 确认 `handleNextAction` 在运行（不能 skip）
-- 检查 `page.frames` 中是否有 `newassets.hcaptcha.com` URL
-- 确认超时足够长（当前 60s）
-
-### Chrome 启动失败
-- 检查 Xvfb 是否运行: `pgrep -f 'Xvfb :99'`
-- 检查 DISPLAY 环境变量: `echo $DISPLAY`
-- Chrome 145 路径: `~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome`
-
-### SwiftShader 警告
-```
-Automatic fallback to software WebGL has been deprecated.
-Please use the --enable-unsafe-swiftshader flag
-```
-已通过 `--enable-unsafe-swiftshader` 解决。
-
-## 生产部署
-
-```bash
-# systemd service 示例
-[Service]
-Environment=DISPLAY=:99
-ExecStartPre=/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -ac
-ExecStart=/usr/bin/python3 /path/to/main.py
-```
-
-或 Docker:
-```dockerfile
-RUN apt-get install -y xvfb
-CMD Xvfb :99 -screen 0 1920x1080x24 -ac & DISPLAY=:99 python3 main.py
-```
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| Stripe 字段 "incomplete" | 点击坐标错误 | 检查 iframe box + y+25 |
+| hCaptcha 超时 | Chrome headless 模式 | 改用 Xvfb 有头模式 |
+| Cloudflare 阻断 | 缺少 CF cookie | 先访问 chatgpt.com/ 通关 |
+| 支付 $150 而非 $0 | 使用了旧 promo | 改为 `team-1-month-free` |
+| 地址字段为空 | 字段超出 iframe 可视区 | 用 `frame.evaluate()` |
+| Tab 不跳转 | 跨 iframe 键盘事件不传递 | 不用 Tab，Stripe 自动跳转 |
