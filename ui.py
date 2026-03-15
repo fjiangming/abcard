@@ -421,6 +421,14 @@ elif account_source == "🔑 手动输入 Token":
         cred_session_token = st.text_input("session_token (可选)", placeholder="可为空，仅 API 模式需要", type="password", key="w_manual_st")
         cred_device_id = st.text_input("device_id (可选)", placeholder="留空自动生成", key="w_manual_did")
 
+# ── 注册模式下显示邮箱配置 ──
+if do_register:
+    with st.expander("📧 邮箱配置", expanded=True):
+        _mc1, _mc2, _mc3 = st.columns(3)
+        mail_worker = _mc1.text_input("Worker API", value="https://apimail.mkai.de5.net", key="w_mail_worker_reg")
+        mail_domain = _mc2.text_input("邮箱域名", value="mkai.de5.net", key="w_mail_domain_reg")
+        mail_token = _mc3.text_input("邮箱 Token", value="ma123999", type="password", key="w_mail_token_reg")
+
 # ── 开发者模式: 启动时通过 -- --dev 参数开启 ──
 # 用法: streamlit run ui.py -- --dev
 dev_mode = "--dev" in sys.argv
@@ -485,10 +493,11 @@ if dev_mode:
 
         st.markdown("---")
         st.markdown("**📧 邮箱 & 计划设置**")
-        mail_worker = st.text_input("邮箱 Worker", value="https://apimail.mkai.de5.net")
-        adv_mc1, adv_mc2 = st.columns(2)
-        mail_domain = adv_mc1.text_input("邮箱域名", value="mkai.de5.net")
-        mail_token = adv_mc2.text_input("邮箱 Token", value="ma123999", type="password")
+        if not do_register:
+            mail_worker = st.text_input("邮箱 Worker", value="https://apimail.mkai.de5.net", key="w_mail_worker_dev")
+            adv_mc1, adv_mc2 = st.columns(2)
+            mail_domain = adv_mc1.text_input("邮箱域名", value="mkai.de5.net", key="w_mail_domain_dev")
+            mail_token = adv_mc2.text_input("邮箱 Token", value="ma123999", type="password", key="w_mail_token_dev")
         if plan_type == "team":
             adv_tc1, adv_tc2, adv_tc3 = st.columns(3)
             workspace_name = adv_tc1.text_input("Workspace", value="Artizancloud")
@@ -579,11 +588,11 @@ with cfg_col1:
                 st.session_state["w_card_number"] = tc_num
                 st.session_state["w_card_cvc"] = tc_cvc
 
-            cc1, cc2, cc3, cc4 = st.columns([3, 1, 1, 1])
+            cc1, cc2, cc3, cc4 = st.columns([5, 2, 2, 2])
             card_number = cc1.text_input("卡号", placeholder="真实卡号", key="w_card_number")
             exp_month = cc2.text_input("月", key="w_exp_month")
             exp_year = cc3.text_input("年", key="w_exp_year")
-            card_cvc = cc4.text_input("CVC", type="password", key="w_card_cvc")
+            card_cvc = cc4.text_input("CVC", key="w_card_cvc")
 
             if card_number and card_number.startswith("4"):
                 st.caption("⚠️ Live 模式下所有测试卡都会被拒绝，仅用于验证流程")
