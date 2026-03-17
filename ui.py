@@ -841,8 +841,8 @@ if _code_info:
             st.rerun()
 
 
-# 日志关键词 → 进度百分比映射
-_PROGRESS_KEYWORDS = [
+# 日志关键词 → 进度百分比映射 (按模式区分)
+_PROGRESS_KEYWORDS_FULL = [
     ("使用已有凭证", 5),
     ("邮箱创建成功", 3),
     ("注册完成", 10),
@@ -869,6 +869,53 @@ _PROGRESS_KEYWORDS = [
     ("支付失败", 98),
 ]
 
+# 仅注册模式: 注册相关关键词拉伸到 0~98%
+_PROGRESS_KEYWORDS_REG_ONLY = [
+    ("网络正常", 5),
+    ("CSRF Token", 15),
+    ("OpenAI 授权地址", 25),
+    ("OAuth 初始化", 30),
+    ("邮箱创建成功", 10),
+    ("Sentinel Token", 40),
+    ("注册邮箱已提交", 50),
+    ("OTP 已发送", 55),
+    ("OTP 验证成功", 65),
+    ("密码注册提交成功", 50),
+    ("账户创建成功", 75),
+    ("重定向链完成", 85),
+    ("认证 Session", 90),
+    ("注册流程完成", 98),
+    ("密码注册流程完成", 98),
+    ("注册完成", 98),
+]
+
+# 仅绑卡模式: 支付相关关键词拉伸到 0~98%
+_PROGRESS_KEYWORDS_BIND_ONLY = [
+    ("使用已有凭证", 5),
+    ("access_token 刷新成功", 8),
+    ("创建 Checkout Session", 12),
+    ("Checkout 创建成功", 18),
+    ("启动 Chrome", 22),
+    ("Chrome ready", 28),
+    ("通过 Cloudflare", 35),
+    ("Cloudflare 已通过", 42),
+    ("加载 checkout 页面", 48),
+    ("Stripe Payment Element", 55),
+    ("Stripe Element 已加载", 60),
+    ("填写卡片信息", 65),
+    ("已输入卡号", 70),
+    ("已输入 CVC", 75),
+    ("填写账单地址", 78),
+    ("地址-邮编", 82),
+    ("已点击提交按钮", 86),
+    ("等待支付处理", 90),
+    ("hCaptcha", 92),
+    ("checkbox 已点击", 95),
+    ("支付成功", 98),
+    ("支付被拒", 98),
+    ("支付失败", 98),
+]
+
 def _calc_progress_pct():
     """根据 session_state.log_buffer (累积) 计算当前进度百分比"""
     pull_captured_logs()  # 先把 _LOG_CACHE 搬运到 log_buffer
@@ -877,7 +924,15 @@ def _calc_progress_pct():
         return 1
     text = "\n".join(logs[-30:])
     best = 1
-    for keyword, pct in _PROGRESS_KEYWORDS:
+    # 根据当前执行模式选择关键词表
+    flow_mode = st.session_state.get("_active_flow_mode", "注册 + 绑卡")
+    if flow_mode == "仅注册":
+        keywords = _PROGRESS_KEYWORDS_REG_ONLY
+    elif flow_mode == "仅绑卡":
+        keywords = _PROGRESS_KEYWORDS_BIND_ONLY
+    else:
+        keywords = _PROGRESS_KEYWORDS_FULL
+    for keyword, pct in keywords:
         if keyword in text and pct > best:
             best = pct
     return best
@@ -1016,6 +1071,35 @@ def _run_flow_thread(rd, cs):
 
 
 # ════════════════════════════════════════
+# Widget 值备份/恢复 — 防止切换模式时 Streamlit 自动清理被隐藏 widget 的值
+# Streamlit 行为: widget 不渲染时，其 key 会被从 session_state 中删除
+# 解决方案: 用 _bak_xxx 前缀备份，widget 重新出现时从备份恢复
+# ════════════════════════════════════════
+_PRESERVE_WIDGET_KEYS = [
+    # 邮箱配置 (do_register=False 时隐藏)
+    "w_mail_worker_reg", "w_mail_domain_reg", "w_mail_token_reg",
+    "w_register_mode", "w_default_password",
+    # 卡片信息 (do_payment=False 时隐藏)
+    "w_card_number", "w_card_cvc", "w_exp_month", "w_exp_year",
+    # 账单地址 (do_payment=False 时隐藏)
+    "w_billing_name", "w_currency", "w_address_line1", "w_address_city",
+    "w_address_state", "w_postal_code", "w_country",
+    # 代理
+    "w_proxy",
+]
+
+# 备份: 将当前 widget 值复制到 _bak_ 前缀 key
+for _wk in _PRESERVE_WIDGET_KEYS:
+    if _wk in st.session_state:
+        st.session_state[f"_bak_{_wk}"] = st.session_state[_wk]
+
+# 恢复: 如果 widget key 被 Streamlit 清理了，从备份恢复
+for _wk in _PRESERVE_WIDGET_KEYS:
+    if _wk not in st.session_state and f"_bak_{_wk}" in st.session_state:
+        st.session_state[_wk] = st.session_state[f"_bak_{_wk}"]
+
+
+# ════════════════════════════════════════
 # ════════════════════════════════════════
 # 布局分栏 (左中右)
 # ════════════════════════════════════════
@@ -1023,7 +1107,7 @@ def _run_flow_thread(rd, cs):
 col_left, col_mid, col_right = st.columns([1, 1, 1], gap="medium")
 
 with col_left:
-    # ── 账号来源选择 ──
+    # ── 执行模式选择 ──
     # 从数据库获取当前兑换码的有 token 的执行记录 (用于「选择已有账号」)
     _code_history = get_code_history(st.session_state.verified_code) if _ENABLE_CODE_SYSTEM else []
     _code_success_creds = []
@@ -1036,60 +1120,70 @@ with col_left:
             except Exception:
                 pass
 
-    acct_col, proxy_col = st.columns([3, 2])
-    with acct_col:
-        account_source = st.radio(
-            "账号来源",
-            ["新注册", "选择已有账号", "手动输入 Token"],
-            index=1 if _code_success_creds else 0,
+    mode_col, proxy_col = st.columns([3, 2])
+    with mode_col:
+        flow_mode = st.radio(
+            "执行模式",
+            ["仅注册", "仅绑卡", "注册 + 绑卡"],
+            index=2,  # 默认二合一
             horizontal=True,
+            key="w_flow_mode",
         )
-        do_register = account_source == "新注册"
 
-    do_checkout = True
-    do_payment = True
+    # 根据模式派生控制标志
+    do_register = flow_mode in ["仅注册", "注册 + 绑卡"]
+    do_checkout = flow_mode in ["仅绑卡", "注册 + 绑卡"]
+    do_payment = flow_mode in ["仅绑卡", "注册 + 绑卡"]
 
     if dev_mode:
         with proxy_col:
             sc1, sc2 = st.columns(2)
-            do_checkout = sc1.checkbox("创建 Checkout", value=True)
-            do_payment = sc2.checkbox("提交支付", value=True)
+            do_checkout = sc1.checkbox("创建 Checkout", value=do_checkout)
+            do_payment = sc2.checkbox("提交支付", value=do_payment)
 
     with proxy_col:
         proxy = st.text_input("代理", placeholder="http://127.0.0.1:7897", key="w_proxy", on_change=_on_config_change)
 
-    # ── 已有账号选择 / Token 输入 ──
+    # ── 仅绑卡模式: 已有账号选择 / Token 输入 ──
     cred_email = ""
     cred_session_token = ""
     cred_access_token = ""
     cred_device_id = ""
-    use_existing_creds = not do_register
+    use_existing_creds = (flow_mode == "仅绑卡")
 
-    if account_source == "选择已有账号":
-        if _code_success_creds:
-            _cred_options = {}
-            for _cd in _code_success_creds:
-                _label = f"{_cd.get('email', '未知')}"
-                _cred_options[_label] = _cd
-            if _cred_options:
-                sel_label = st.selectbox("选择账号", list(_cred_options.keys()), key="w_acct_select")
-                _sel_data = _cred_options[sel_label]
-                cred_email = _sel_data.get("email", "")
-                cred_session_token = _sel_data.get("session_token", "")
-                cred_access_token = _sel_data.get("access_token", "")
-                cred_device_id = _sel_data.get("device_id", "")
-                with st.expander("查看凭证详情", expanded=False):
-                    st.json({k: (v[:40] + "..." if isinstance(v, str) and len(v) > 50 else v) for k, v in _sel_data.items()})
+    if flow_mode == "仅绑卡":
+        account_source = st.radio(
+            "账号来源",
+            ["选择已有账号", "手动输入 Token"],
+            index=0 if _code_success_creds else 1,
+            horizontal=True,
+        )
+
+        if account_source == "选择已有账号":
+            if _code_success_creds:
+                _cred_options = {}
+                for _cd in _code_success_creds:
+                    _label = f"{_cd.get('email', '未知')}"
+                    _cred_options[_label] = _cd
+                if _cred_options:
+                    sel_label = st.selectbox("选择账号", list(_cred_options.keys()), key="w_acct_select")
+                    _sel_data = _cred_options[sel_label]
+                    cred_email = _sel_data.get("email", "")
+                    cred_session_token = _sel_data.get("session_token", "")
+                    cred_access_token = _sel_data.get("access_token", "")
+                    cred_device_id = _sel_data.get("device_id", "")
+                    with st.expander("查看凭证详情", expanded=False):
+                        st.json({k: (v[:40] + "..." if isinstance(v, str) and len(v) > 50 else v) for k, v in _sel_data.items()})
+                else:
+                    st.warning("未找到有效的凭证")
             else:
-                st.warning("未找到有效的凭证")
-        else:
-            st.warning("暂无已注册的账号，请先选择「新注册」")
+                st.warning("暂无已注册的账号，请先使用「仅注册」模式注册")
 
-    elif account_source == "手动输入 Token":
-        cred_access_token = st.text_input("access_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_at")
-        cred_session_token = st.text_input("session_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_st",
-                                            help="浏览器 F12 → Application → Cookies → __Secure-next-auth.session-token")
-        cred_email = st.text_input("邮箱 (可选)", placeholder="user@example.com", key="w_manual_email")
+        elif account_source == "手动输入 Token":
+            cred_access_token = st.text_input("access_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_at")
+            cred_session_token = st.text_input("session_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_st",
+                                                help="浏览器 F12 → Application → Cookies → __Secure-next-auth.session-token")
+            cred_email = st.text_input("邮箱 (可选)", placeholder="user@example.com", key="w_manual_email")
 
     # ── 注册模式下显示邮箱配置 ──
     if do_register:
@@ -1131,14 +1225,17 @@ with col_left:
         mail_worker = ""
         mail_domain = ""
         mail_token = ""
-    # 计划类型选择 (始终可见)
-    plan_type_label = st.radio(
-        "选择计划",
-        ["Business · 团队版免费试用 1 个月", "Plus · 个人版免费试用 1 个月"],
-        index=0,
-        horizontal=True,
-    )
-    plan_type = "plus" if "Plus" in plan_type_label else "team"
+    # 计划类型选择 (仅绑卡/注册+绑卡时显示)
+    if do_checkout:
+        plan_type_label = st.radio(
+            "选择计划",
+            ["Business · 团队版免费试用 1 个月", "Plus · 个人版免费试用 1 个月"],
+            index=0,
+            horizontal=True,
+        )
+        plan_type = "plus" if "Plus" in plan_type_label else "team"
+    else:
+        plan_type = "team"  # 仅注册模式下不需要计划选择
     if plan_type == "plus":
         workspace_name = ""
         seat_quantity = 0
@@ -1289,36 +1386,40 @@ with col_left:
             card_number = exp_month = exp_year = card_cvc = ""
 
     with cfg_col2:
-        with st.expander("账单地址", expanded=True):
-            # 如果有解析出的国家，自动选择对应国家
-            country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country", on_change=_on_config_change)
-            country_code, default_currency, default_state, default_addr, default_zip = COUNTRY_MAP[country_label]
-            # 当国家变更时，更新地址默认值 (但不覆盖刚解析的值)
-            _prev_country = st.session_state.get("_prev_country", "")
-            if _prev_country and _prev_country != country_label and not _parse_just_applied:
-                st.session_state["w_currency"] = default_currency
-                st.session_state["w_address_line1"] = default_addr
-                st.session_state["w_address_state"] = default_state
-                st.session_state["w_postal_code"] = default_zip
-            st.session_state["_prev_country"] = country_label
-            bc1, bc2 = st.columns(2)
-            billing_name = bc1.text_input("姓名", key="w_billing_name", on_change=_on_config_change)
-            if "w_currency" not in st.session_state:
-                st.session_state["w_currency"] = default_currency
-            currency = bc2.text_input("货币", key="w_currency", on_change=_on_config_change)
-            bc3, bc4, bc5, bc6 = st.columns(4)
-            if "w_address_line1" not in st.session_state:
-                st.session_state["w_address_line1"] = default_addr
-            if "w_address_city" not in st.session_state:
-                st.session_state["w_address_city"] = ""
-            if "w_address_state" not in st.session_state:
-                st.session_state["w_address_state"] = default_state
-            if "w_postal_code" not in st.session_state:
-                st.session_state["w_postal_code"] = default_zip
-            address_line1 = bc3.text_input("地址", key="w_address_line1", on_change=_on_config_change)
-            address_city = bc4.text_input("城市", key="w_address_city", on_change=_on_config_change)
-            address_state = bc5.text_input("州/省", key="w_address_state", on_change=_on_config_change)
-            postal_code = bc6.text_input("邮编", key="w_postal_code", on_change=_on_config_change)
+        if do_payment:
+            with st.expander("账单地址", expanded=True):
+                # 如果有解析出的国家，自动选择对应国家
+                country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country", on_change=_on_config_change)
+                country_code, default_currency, default_state, default_addr, default_zip = COUNTRY_MAP[country_label]
+                # 当国家变更时，更新地址默认值 (但不覆盖刚解析的值)
+                _prev_country = st.session_state.get("_prev_country", "")
+                if _prev_country and _prev_country != country_label and not _parse_just_applied:
+                    st.session_state["w_currency"] = default_currency
+                    st.session_state["w_address_line1"] = default_addr
+                    st.session_state["w_address_state"] = default_state
+                    st.session_state["w_postal_code"] = default_zip
+                st.session_state["_prev_country"] = country_label
+                bc1, bc2 = st.columns(2)
+                billing_name = bc1.text_input("姓名", key="w_billing_name", on_change=_on_config_change)
+                if "w_currency" not in st.session_state:
+                    st.session_state["w_currency"] = default_currency
+                currency = bc2.text_input("货币", key="w_currency", on_change=_on_config_change)
+                bc3, bc4, bc5, bc6 = st.columns(4)
+                if "w_address_line1" not in st.session_state:
+                    st.session_state["w_address_line1"] = default_addr
+                if "w_address_city" not in st.session_state:
+                    st.session_state["w_address_city"] = ""
+                if "w_address_state" not in st.session_state:
+                    st.session_state["w_address_state"] = default_state
+                if "w_postal_code" not in st.session_state:
+                    st.session_state["w_postal_code"] = default_zip
+                address_line1 = bc3.text_input("地址", key="w_address_line1", on_change=_on_config_change)
+                address_city = bc4.text_input("城市", key="w_address_city", on_change=_on_config_change)
+                address_state = bc5.text_input("州/省", key="w_address_state", on_change=_on_config_change)
+                postal_code = bc6.text_input("邮编", key="w_postal_code", on_change=_on_config_change)
+        else:
+            billing_name = country_code = currency = ""
+            address_line1 = address_city = address_state = postal_code = ""
 
     st.divider()
 
@@ -1331,10 +1432,12 @@ if do_payment: steps_list.append("支付")
 
 with col_mid:
     # 额度提示
-    if do_register:
-        st.info("新注册模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
+    if flow_mode == "仅注册":
+        st.info("🆕 仅注册模式: 消耗 **1** 次额度")
+    elif flow_mode == "仅绑卡":
+        st.info("💳 仅绑卡模式: 消耗 **1** 次额度")
     else:
-        st.info("已有账号模式: 消耗 **1** 次额度")
+        st.info("🔗 注册 + 绑卡模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
     btn_col1, btn_col2 = st.columns([4, 1])
     with btn_col1:
         run_btn = st.button("开始执行", disabled=st.session_state.running or not steps_list,
@@ -1344,7 +1447,7 @@ with col_mid:
 
     # ── 点击开始: 表单验证 → 验证兑换码 → 预留额度 → 启动线程 ──
     if run_btn and not st.session_state.running:
-        # 表单验证
+        # 表单验证 (按模式区分)
         _errors = []
         if do_register:
             if not mail_worker or not mail_worker.startswith("http"):
@@ -1353,9 +1456,12 @@ with col_mid:
                 _errors.append("请填写邮箱域名")
             if not mail_token:
                 _errors.append("请填写密码")
-        elif use_existing_creds and do_checkout:
+        if use_existing_creds and do_checkout:
             if not cred_access_token:
                 _errors.append("请提供 access_token")
+        if do_payment:
+            if not st.session_state.get("w_card_number", ""):
+                _errors.append("请填写信用卡卡号")
         if _errors:
             for _e in _errors:
                 st.error(_e)
@@ -1368,9 +1474,9 @@ with col_mid:
                 st.error(f"兑换码不可用: {_vm}")
                 st.stop()
 
-        # 预留使用额度 (新注册=2, 其他=1)
+        # 预留使用额度: 注册+绑卡=2, 其他=1
         if _ENABLE_CODE_SYSTEM:
-            _reserve_amount = 2 if do_register else 1
+            _reserve_amount = 2 if (flow_mode == "注册 + 绑卡") else 1
             _exec_id = reserve_use(st.session_state.verified_code, plan_type=plan_type, amount=_reserve_amount)
             if _exec_id is None:
                 st.error("兑换码额度不足")
@@ -1381,6 +1487,9 @@ with col_mid:
         st.session_state._execution_id = _exec_id
         if _exec_id:
             update_execution(_exec_id, status="running")
+
+        # 记录当前执行模式 (供进度条使用)
+        st.session_state["_active_flow_mode"] = flow_mode
 
         # 保存当前配置到 config.json
         _save_config_to_file(
@@ -1394,9 +1503,13 @@ with col_mid:
             "workspace_name": workspace_name, "seat_quantity": seat_quantity, "promo_campaign": promo_campaign,
             "plan_type": plan_type,
             "captcha_api_url": captcha_api_url, "captcha_key": captcha_key,
-            "billing_name": billing_name, "country_code": country_code, "currency": currency,
-            "address_line1": address_line1, "address_city": address_city,
-            "address_state": address_state, "postal_code": postal_code,
+            "billing_name": billing_name if do_payment else "",
+            "country_code": country_code if do_payment else "US",
+            "currency": currency if do_payment else "USD",
+            "address_line1": address_line1 if do_payment else "",
+            "address_city": address_city if do_payment else "",
+            "address_state": address_state if do_payment else "",
+            "postal_code": postal_code if do_payment else "",
             "card_number": card_number if do_payment else "",
             "card_cvc": card_cvc if do_payment else "",
             "exp_month": exp_month if do_payment else "",
@@ -1462,6 +1575,13 @@ with col_mid:
                     result_json=json.dumps(rd, ensure_ascii=False, default=str),
                 )
                 st.session_state._execution_id = None
+            # ── 同步保存配置到兑换码数据库 (与账号数据持久化时机一致) ──
+            _cur_code = st.session_state.get("verified_code", "")
+            if _ENABLE_CODE_SYSTEM and _cur_code and _cur_code != "__disabled__":
+                try:
+                    save_code_config(_cur_code, _collect_config_from_session())
+                except Exception:
+                    pass
             st.rerun()
         else:
             import time as _time
