@@ -970,10 +970,7 @@ def _run_flow_thread(rd, cs):
                 auth_result = af.run_register_with_password(mp, password=cs.get("default_password", ""))
             else:
                 auth_result = af.run_register(mp)
-            rd["email"] = auth_result.email
-            rd["session_token"] = auth_result.session_token
-            rd["access_token"] = auth_result.access_token
-            rd["device_id"] = auth_result.device_id
+            rd.update(auth_result.to_dict())  # 完整写入所有字段 (含 refresh_token 等)
             store.save_credentials(auth_result.to_dict())
             store.append_credentials_csv(auth_result.to_dict())
         elif cs["use_existing_creds"] and cs["do_checkout"]:
@@ -1803,9 +1800,13 @@ with col_right:
                 base_url = base_url.rstrip("/")
                 for cd in cred_list:
                     email = cd.get("email", "unknown")
-                    # 构建 key: 排除内部字段和 synced 标记
-                    key_data = {k: v for k, v in cd.items()
-                                if not k.startswith("_") and k != "synced_to_newapi"}
+                    # 构建 key: 仅保留 credentials 字段 (与 auth_result.to_dict() 一致)
+                    _CRED_KEYS = {
+                        "type", "email", "expired", "id_token", "account_id",
+                        "access_token", "last_refresh", "refresh_token",
+                        "session_token", "device_id", "csrf_token", "password",
+                    }
+                    key_data = {k: v for k, v in cd.items() if k in _CRED_KEYS}
                     key_json = json.dumps(key_data, ensure_ascii=False)
                     payload = {
                         "mode": "single",
