@@ -22,7 +22,7 @@ from auth_flow import AuthFlow, AuthResult
 from payment_flow import PaymentFlow
 from logger import ResultStore
 from database import init_db
-from code_manager import validate_code, reserve_use, complete_use, update_execution, get_code_history, get_code_info
+from code_manager import validate_code, reserve_use, complete_use, update_execution, get_code_history, get_code_info, save_code_config, load_code_config
 
 init_db()
 
@@ -41,50 +41,45 @@ OUTPUT_DIR = "test_outputs"
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 
-def _load_config_defaults():
-    """启动时从 config.json 加载已保存的配置到 session_state 默认值"""
-    if st.session_state.get("_config_loaded"):
-        return
-    try:
-        if not os.path.isfile(_CONFIG_PATH):
-            return
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return
+# widget key → config.json 路径的映射 (复用)
+_WIDGET_CONFIG_MAPPING = {
+    # 邮箱
+    "w_mail_worker_reg": ("mail", "worker_domain"),
+    "w_mail_domain_reg": ("mail", "email_domain"),
+    "w_mail_token_reg": ("mail", "admin_token"),
+    # 代理
+    "w_proxy": ("proxy",),
+    # 注册
+    "w_register_mode": ("register_mode",),
+    "w_default_password": ("default_password",),
+    # NewAPI
+    "w_newapi_base": ("newapi", "base_url"),
+    "w_newapi_token": ("newapi", "admin_token"),
+    "w_newapi_type": ("newapi", "channel_type"),
+    "w_newapi_models": ("newapi", "models"),
+    "w_newapi_group": ("newapi", "group"),
+    "w_newapi_priority": ("newapi", "priority"),
+    "w_newapi_weight": ("newapi", "weight"),
+    # 卡片
+    "w_card_number": ("card", "number"),
+    "w_card_cvc":    ("card", "cvc"),
+    "w_exp_month":   ("card", "exp_month"),
+    "w_exp_year":    ("card", "exp_year"),
+    # 账单
+    "w_billing_name":  ("billing", "name"),
+    "w_currency":      ("billing", "currency"),
+    "w_address_line1": ("billing", "address_line1"),
+    "w_address_state": ("billing", "address_state"),
+    "w_postal_code":   ("billing", "postal_code"),
+    "w_address_city":  ("billing", "city"),
+}
 
-    mapping = {
-        # 邮箱
-        "w_mail_worker_reg": ("mail", "worker_domain"),
-        "w_mail_domain_reg": ("mail", "email_domain"),
-        "w_mail_token_reg": ("mail", "admin_token"),
-        # 代理
-        "w_proxy": ("proxy",),
-        # 注册
-        "w_register_mode": ("register_mode",),
-        "w_default_password": ("default_password",),
-        # NewAPI
-        "w_newapi_base": ("newapi", "base_url"),
-        "w_newapi_token": ("newapi", "admin_token"),
-        "w_newapi_type": ("newapi", "channel_type"),
-        "w_newapi_models": ("newapi", "models"),
-        "w_newapi_group": ("newapi", "group"),
-        "w_newapi_priority": ("newapi", "priority"),
-        "w_newapi_weight": ("newapi", "weight"),
-        # 卡片
-        "w_card_number": ("card", "number"),
-        "w_card_cvc":    ("card", "cvc"),
-        "w_exp_month":   ("card", "exp_month"),
-        "w_exp_year":    ("card", "exp_year"),
-        # 账单
-        "w_billing_name":  ("billing", "name"),
-        "w_currency":      ("billing", "currency"),
-        "w_address_line1": ("billing", "address_line1"),
-        "w_address_state": ("billing", "address_state"),
-        "w_postal_code":   ("billing", "postal_code"),
-        "w_address_city":  ("billing", "city"),
-    }
-    for widget_key, path in mapping.items():
+
+def _apply_config_data(data: dict, force: bool = False):
+    """将配置 dict 应用到 session_state。
+    force=False: 仅设置 default（不覆盖已有值），用于 config.json 兜底加载
+    force=True: 强制覆盖已有值，用于数据库加载（优先级更高）"""
+    for widget_key, path in _WIDGET_CONFIG_MAPPING.items():
         val = data
         for p in path:
             if isinstance(val, dict):
@@ -93,16 +88,49 @@ def _load_config_defaults():
                 val = None
                 break
         if val is not None and val != "":
-            st.session_state.setdefault(widget_key, str(val))
-
+            if force:
+                st.session_state[widget_key] = str(val)
+            else:
+                st.session_state.setdefault(widget_key, str(val))
     # 国家映射: billing.country → w_country selectbox label
     bc = data.get("billing", {}).get("country", "")
     if bc:
         for label in COUNTRY_MAP:
             if label.startswith(bc):
-                st.session_state.setdefault("w_country", label)
+                if force:
+                    st.session_state["w_country"] = label
+                else:
+                    st.session_state.setdefault("w_country", label)
                 break
 
+
+def _load_config_defaults():
+    """启动时加载配置到 session_state 默认值。
+    优先级: 兑换码数据库配置 > config.json 全局配置"""
+    if st.session_state.get("_config_loaded"):
+        return
+
+    # 1) 尝试从兑换码数据库加载配置
+    code = st.session_state.get("verified_code", "")
+    if _ENABLE_CODE_SYSTEM and code and code != "__disabled__":
+        code_cfg = load_code_config(code)
+        if code_cfg:
+            _apply_config_data(code_cfg, force=True)
+            st.session_state["_config_loaded"] = True
+            return
+
+    # 2) 回退到 config.json
+    try:
+        if not os.path.isfile(_CONFIG_PATH):
+            st.session_state["_config_loaded"] = True
+            return
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        st.session_state["_config_loaded"] = True
+        return
+
+    _apply_config_data(data)
     st.session_state["_config_loaded"] = True
 
 
@@ -162,9 +190,59 @@ def _save_config_to_file(**overrides):
         logging.getLogger("ui").warning(f"保存 config.json 失败: {e}")
 
 
+def _collect_config_from_session() -> dict:
+    """从 session_state 收集当前配置为 dict (可用于存入数据库)"""
+    data = {}
+    data["mail"] = {
+        "worker_domain": st.session_state.get("w_mail_worker_reg", ""),
+        "admin_token": st.session_state.get("w_mail_token_reg", ""),
+        "email_domain": st.session_state.get("w_mail_domain_reg", ""),
+    }
+    data["proxy"] = st.session_state.get("w_proxy", "") or None
+    rm = st.session_state.get("w_register_mode", "OTP 注册")
+    data["register_mode"] = "password" if "密码" in rm else "otp"
+    data["default_password"] = st.session_state.get("w_default_password", "") or None
+    data["newapi"] = {
+        "base_url": st.session_state.get("w_newapi_base", ""),
+        "admin_token": st.session_state.get("w_newapi_token", ""),
+        "channel_type": st.session_state.get("w_newapi_type", "57"),
+        "models": st.session_state.get("w_newapi_models", ""),
+        "group": st.session_state.get("w_newapi_group", "default,vip,svip"),
+        "priority": st.session_state.get("w_newapi_priority", "0"),
+        "weight": st.session_state.get("w_newapi_weight", "0"),
+    }
+    data["card"] = {
+        "number": st.session_state.get("w_card_number", ""),
+        "cvc": st.session_state.get("w_card_cvc", ""),
+        "exp_month": st.session_state.get("w_exp_month", ""),
+        "exp_year": st.session_state.get("w_exp_year", ""),
+    }
+    country_label = st.session_state.get("w_country", "")
+    country_code = ""
+    if country_label and country_label in COUNTRY_MAP:
+        country_code = COUNTRY_MAP[country_label][0]
+    data["billing"] = {
+        "name": st.session_state.get("w_billing_name", ""),
+        "currency": st.session_state.get("w_currency", ""),
+        "address_line1": st.session_state.get("w_address_line1", ""),
+        "address_state": st.session_state.get("w_address_state", ""),
+        "postal_code": st.session_state.get("w_postal_code", ""),
+        "city": st.session_state.get("w_address_city", ""),
+        "country": country_code,
+    }
+    return data
+
+
 def _on_config_change():
-    """widget 值变化时自动保存邮箱/代理配置到 config.json"""
+    """widget 值变化时自动保存配置 (config.json + 兑换码数据库)"""
     _save_config_to_file()
+    # 兑换码系统开启时，同步保存到数据库
+    code = st.session_state.get("verified_code", "")
+    if _ENABLE_CODE_SYSTEM and code and code != "__disabled__":
+        try:
+            save_code_config(code, _collect_config_from_session())
+        except Exception:
+            pass
 
 
 def _sanitize_error(raw_error: str) -> str:
@@ -697,8 +775,7 @@ for _dk, _dv in _widget_defaults.items():
     if _dk not in st.session_state:
         st.session_state[_dk] = _dv
 
-# 从 config.json 加载已保存的配置 (覆盖硬编码默认值)
-_load_config_defaults()
+# 配置加载移到 verified_code 初始化之后 (见下方兑换码门禁后)
 
 # ── 延迟的解析结果应用 (必须在 widget 渲染之前) ──
 _parse_just_applied = False
@@ -747,6 +824,9 @@ if _ENABLE_CODE_SYSTEM and not st.session_state.verified_code:
         else:
             st.error(_msg)
     st.stop()
+
+# ── 兑换码验证通过后, 加载配置 (此时 verified_code 已有正确值) ──
+_load_config_defaults()
 
 # ── 已验证: 显示兑换码状态 ──
 _code_info = get_code_info(st.session_state.verified_code) if _ENABLE_CODE_SYSTEM else None
@@ -1198,10 +1278,10 @@ with col_left:
                     st.session_state["w_card_cvc"] = tc_cvc
 
                 cc1, cc2, cc3, cc4 = st.columns([5, 2, 2, 2])
-                card_number = cc1.text_input("卡号", placeholder="真实卡号", key="w_card_number")
-                exp_month = cc2.text_input("月", key="w_exp_month")
-                exp_year = cc3.text_input("年", key="w_exp_year")
-                card_cvc = cc4.text_input("CVC", key="w_card_cvc")
+                card_number = cc1.text_input("卡号", placeholder="真实卡号", key="w_card_number", on_change=_on_config_change)
+                exp_month = cc2.text_input("月", key="w_exp_month", on_change=_on_config_change)
+                exp_year = cc3.text_input("年", key="w_exp_year", on_change=_on_config_change)
+                card_cvc = cc4.text_input("CVC", key="w_card_cvc", on_change=_on_config_change)
 
                 if card_number and card_number.startswith("4"):
                     st.caption("Live 模式下所有测试卡都会被拒绝，仅用于验证流程")
@@ -1211,7 +1291,7 @@ with col_left:
     with cfg_col2:
         with st.expander("账单地址", expanded=True):
             # 如果有解析出的国家，自动选择对应国家
-            country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country")
+            country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country", on_change=_on_config_change)
             country_code, default_currency, default_state, default_addr, default_zip = COUNTRY_MAP[country_label]
             # 当国家变更时，更新地址默认值 (但不覆盖刚解析的值)
             _prev_country = st.session_state.get("_prev_country", "")
@@ -1222,10 +1302,10 @@ with col_left:
                 st.session_state["w_postal_code"] = default_zip
             st.session_state["_prev_country"] = country_label
             bc1, bc2 = st.columns(2)
-            billing_name = bc1.text_input("姓名", key="w_billing_name")
+            billing_name = bc1.text_input("姓名", key="w_billing_name", on_change=_on_config_change)
             if "w_currency" not in st.session_state:
                 st.session_state["w_currency"] = default_currency
-            currency = bc2.text_input("货币", key="w_currency")
+            currency = bc2.text_input("货币", key="w_currency", on_change=_on_config_change)
             bc3, bc4, bc5, bc6 = st.columns(4)
             if "w_address_line1" not in st.session_state:
                 st.session_state["w_address_line1"] = default_addr
@@ -1235,10 +1315,10 @@ with col_left:
                 st.session_state["w_address_state"] = default_state
             if "w_postal_code" not in st.session_state:
                 st.session_state["w_postal_code"] = default_zip
-            address_line1 = bc3.text_input("地址", key="w_address_line1")
-            address_city = bc4.text_input("城市", key="w_address_city")
-            address_state = bc5.text_input("州/省", key="w_address_state")
-            postal_code = bc6.text_input("邮编", key="w_postal_code")
+            address_line1 = bc3.text_input("地址", key="w_address_line1", on_change=_on_config_change)
+            address_city = bc4.text_input("城市", key="w_address_city", on_change=_on_config_change)
+            address_state = bc5.text_input("州/省", key="w_address_state", on_change=_on_config_change)
+            postal_code = bc6.text_input("邮编", key="w_postal_code", on_change=_on_config_change)
 
     st.divider()
 
@@ -1251,10 +1331,10 @@ if do_payment: steps_list.append("支付")
 
 with col_mid:
     # 额度提示
-    # if do_register:
-    #     st.info("新注册模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
-    # else:
-    #     st.info("已有账号模式: 消耗 **1** 次额度")
+    if do_register:
+        st.info("新注册模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
+    else:
+        st.info("已有账号模式: 消耗 **1** 次额度")
     btn_col1, btn_col2 = st.columns([4, 1])
     with btn_col1:
         run_btn = st.button("开始执行", disabled=st.session_state.running or not steps_list,
@@ -1276,13 +1356,6 @@ with col_mid:
         elif use_existing_creds and do_checkout:
             if not cred_access_token:
                 _errors.append("请提供 access_token")
-            if do_payment and not cred_session_token:
-                _errors.append("请提供 session_token (支付时必须)")
-        if do_payment:
-            if not card_number:
-                _errors.append("请填写卡号")
-            if not card_cvc:
-                _errors.append("请填写 CVC")
         if _errors:
             for _e in _errors:
                 st.error(_e)
@@ -1731,3 +1804,15 @@ with col_right:
                             st.write(f"❌ {_email}: {_msg}")
                     if _ok:
                         st.rerun()
+
+# ════════════════════════════════════════
+# 所有 widget 渲染完毕后, 统一保存配置到兑换码数据库
+# (on_change 回调在 widget 渲染前执行, 其他 tab 的值可能不完整,
+#  这里保证收集到所有 tab 的最新值)
+# ════════════════════════════════════════
+_cur_code = st.session_state.get("verified_code", "")
+if _ENABLE_CODE_SYSTEM and _cur_code and _cur_code != "__disabled__":
+    try:
+        save_code_config(_cur_code, _collect_config_from_session())
+    except Exception:
+        pass

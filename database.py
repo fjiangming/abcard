@@ -69,6 +69,11 @@ def init_db():
             conn.execute("SELECT reserved_amount FROM executions LIMIT 1")
         except Exception:
             conn.execute("ALTER TABLE executions ADD COLUMN reserved_amount INTEGER NOT NULL DEFAULT 1")
+        # 自动迁移: codes 表添加 config_json 列 (按兑换码保存配置)
+        try:
+            conn.execute("SELECT config_json FROM codes LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE codes ADD COLUMN config_json TEXT")
 
 
 # ── 初始化 ──

@@ -184,3 +184,26 @@ def list_all_codes() -> list[dict]:
             "FROM codes c ORDER BY c.created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def save_code_config(code: str, config_dict: dict):
+    """将配置 JSON 保存到兑换码记录"""
+    import json
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE codes SET config_json = ? WHERE code = ?",
+            (json.dumps(config_dict, ensure_ascii=False), code.strip()),
+        )
+
+
+def load_code_config(code: str) -> Optional[dict]:
+    """从兑换码记录加载配置 JSON"""
+    import json
+    with get_db() as conn:
+        row = conn.execute("SELECT config_json FROM codes WHERE code = ?", (code.strip(),)).fetchone()
+    if row and row["config_json"]:
+        try:
+            return json.loads(row["config_json"])
+        except Exception:
+            return None
+    return None
