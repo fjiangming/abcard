@@ -695,6 +695,13 @@ st.markdown("""
     
     /* dataframe 外边框 */
     [data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05); }
+
+    /* 日志区域自动换行 */
+    .stCodeBlock pre {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1549,7 +1556,7 @@ with col_mid:
         st.warning("已终止执行")
         st.rerun()
 
-    # ── 运行中: 显示进度 ──
+    # ── 运行中: 显示进度 + 实时日志 ──
     if st.session_state.running:
         pct = _calc_progress_pct()
         st.progress(pct / 100.0)
@@ -1557,6 +1564,44 @@ with col_mid:
             f'<div style="text-align:center;font-size:28px;font-weight:bold;margin:-15px 0 10px;color:#2d3436">{pct}%</div>',
             unsafe_allow_html=True,
         )
+
+        # ── 实时日志: 必须在 st.rerun() 之前渲染，否则不会被执行到 ──
+        st.markdown('<div style="margin-top: 10px; margin-bottom: 5px; font-weight: bold; font-size: 16px;">执行日志</div>', unsafe_allow_html=True)
+        pull_captured_logs()
+        import streamlit.components.v1 as _components
+        import html as _html_mod
+        if st.session_state.log_buffer:
+            _log_text = "\n".join(st.session_state.log_buffer[-150:])
+            _log_escaped = _html_mod.escape(_log_text)
+            _components.html(f"""
+                <style>
+                    body {{ text-size-adjust: 100%; -webkit-text-size-adjust: 100%; margin: 0; padding: 0; }}
+                    #log-box {{
+                        height: 720px;
+                        overflow-y: auto;
+                        background: #f8f9fb;
+                        color: #31333f;
+                        font-family: "Source Code Pro", "Courier New", monospace;
+                        font-size: 14px;
+                        line-height: 1.5;
+                        padding: 1rem;
+                        border-radius: 0.5rem;
+                        border: 1px solid rgba(49, 51, 63, 0.2);
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                        overflow-wrap: break-word;
+                    }}
+                </style>
+                <div id="log-box"><pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;">{_log_escaped}</pre></div>
+                <script>
+                    var box = document.getElementById('log-box');
+                    box.scrollTop = box.scrollHeight;
+                    setTimeout(function(){{ box.scrollTop = box.scrollHeight; }}, 50);
+                </script>
+            """, height=750)
+        else:
+            st.info("等待执行...")
+
         rd = st.session_state.get("_flow_result", {})
         if rd.get("_done"):
             st.session_state.running = False
@@ -1604,20 +1649,42 @@ with col_mid:
             if r.get("confirm_response"):
                 with st.expander("Stripe 原始响应", expanded=False):
                     st.json(r["confirm_response"])
-            pull_captured_logs()
-            if st.session_state.log_buffer:
-                with st.expander("日志", expanded=False):
-                    st.code("\n".join(st.session_state.log_buffer[-200:]), language="log")
 
-
-    st.divider()
-    st.markdown("**执行日志 (Live Logs)**")
-    pull_captured_logs()
-    
-    # 日志区固定高度自动滚动
-    with st.container(height=750):
+    # ── 非运行中的日志区 (完成后 / 空闲时显示) ──
+    if not st.session_state.running:
+        st.markdown('<div style="margin-top: 10px; margin-bottom: 5px; font-weight: bold; font-size: 16px;">执行日志</div>', unsafe_allow_html=True)
+        pull_captured_logs()
+        import streamlit.components.v1 as _components
+        import html as _html_mod
         if st.session_state.log_buffer:
-            st.code("\n".join(st.session_state.log_buffer[-150:]), language="log")
+            _log_text = "\n".join(st.session_state.log_buffer[-150:])
+            _log_escaped = _html_mod.escape(_log_text)
+            _components.html(f"""
+                <style>
+                    body {{ text-size-adjust: 100%; -webkit-text-size-adjust: 100%; margin: 0; padding: 0; }}
+                    #log-box {{
+                        height: 720px;
+                        overflow-y: auto;
+                        background: #f8f9fb;
+                        color: #31333f;
+                        font-family: "Source Code Pro", "Courier New", monospace;
+                        font-size: 14px;
+                        line-height: 1.5;
+                        padding: 1rem;
+                        border-radius: 0.5rem;
+                        border: 1px solid rgba(49, 51, 63, 0.2);
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                        overflow-wrap: break-word;
+                    }}
+                </style>
+                <div id="log-box"><pre style="margin:0;white-space:pre-wrap;word-wrap:break-word;">{_log_escaped}</pre></div>
+                <script>
+                    var box = document.getElementById('log-box');
+                    box.scrollTop = box.scrollHeight;
+                    setTimeout(function(){{ box.scrollTop = box.scrollHeight; }}, 50);
+                </script>
+            """, height=750)
         else:
             st.info("等待执行...")
 
