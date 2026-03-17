@@ -1635,175 +1635,184 @@ with col_right:
                 height=80,
             )
 
-        # ── 扫描 credentials 文件 ──
-        _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
-        _cred_files = []
-        if os.path.isdir(_cred_dir):
-            _cred_files = sorted(
-                [f for f in os.listdir(_cred_dir) if f.startswith("credentials_") and f.endswith(".json")],
-                reverse=True,
-            )
-
-        if not _cred_files:
-            st.info("暂无 credentials 文件。注册成功后自动生成。")
-        else:
-            # 加载并展示
-            _cred_data_list = []
-            for _cf in _cred_files:
-                _cf_path = os.path.join(_cred_dir, _cf)
-                try:
-                    with open(_cf_path, encoding="utf-8") as _f:
-                        _cd = json.load(_f)
-                    _cd["_filename"] = _cf
-                    _cd["_filepath"] = _cf_path
-                    _cred_data_list.append(_cd)
-                except Exception:
-                    pass
-
-            if _cred_data_list:
-                # ── 导入函数 (成功后回写 synced 标记) ──
-                def _do_newapi_import(cred_list, base_url, admin_token, ch_type, models, group, priority, weight):
-                    """将 credentials 列表导入到 NewAPI，成功后标记 synced_to_newapi"""
-                    import requests as _req
-                    results = []
-                    headers = {
-                        "Authorization": f"Bearer {admin_token}",
-                        "Content-Type": "application/json",
-                        "New-Api-User": "1",
-                    }
-                    base_url = base_url.rstrip("/")
-                    for cd in cred_list:
-                        email = cd.get("email", "unknown")
-                        # 构建 key: 排除内部字段和 synced 标记
-                        key_data = {k: v for k, v in cd.items()
-                                    if not k.startswith("_") and k != "synced_to_newapi"}
-                        key_json = json.dumps(key_data, ensure_ascii=False)
-                        payload = {
-                            "mode": "single",
-                            "channel": {
-                                "type": int(ch_type) if ch_type.isdigit() else 57,
-                                "name": f"codex-{email}",
-                                "key": key_json,
-                                "models": models.strip(),
-                                "group": group.strip(),
-                                "priority": int(priority) if str(priority).lstrip("-").isdigit() else 0,
-                                "weight": int(weight) if str(weight).lstrip("-").isdigit() else 0,
-                            },
-                        }
-                        try:
-                            resp = _req.post(
-                                f"{base_url}/api/channel/",
-                                headers=headers, json=payload, timeout=30,
-                            )
-                            if resp.status_code == 200:
-                                try:
-                                    rj = resp.json()
-                                    if rj.get("success"):
-                                        results.append((email, True, "成功"))
-                                        # 回写 synced 标记到 JSON 文件
-                                        _mark_synced(cd)
-                                    else:
-                                        results.append((email, False, rj.get("message", resp.text[:200])))
-                                except Exception:
-                                    results.append((email, False, f"返回非 JSON: {resp.text[:200]}"))
-                            else:
-                                results.append((email, False, f"HTTP {resp.status_code}: {resp.text[:200]}"))
-                        except Exception as e:
-                            results.append((email, False, f"请求异常: {str(e)[:200]}"))
-                    return results
-
-                def _mark_synced(cd):
-                    """导入成功后在 JSON 文件中标记 synced_to_newapi=true"""
-                    filepath = cd.get("_filepath")
-                    if not filepath:
-                        return
+        # ── 获取当前兑换码下的 credentials 数据 ──
+        _cred_data_list = []
+        if _ENABLE_CODE_SYSTEM:
+            # 从兑换码历史中提取有 refresh_token/access_token 的记录
+            _sync_history = get_code_history(st.session_state.verified_code)
+            for _h in _sync_history:
+                if _h.get("result_json"):
                     try:
-                        with open(filepath, encoding="utf-8") as f:
-                            data = json.load(f)
-                        data["synced_to_newapi"] = True
-                        with open(filepath, "w", encoding="utf-8") as f:
-                            json.dump(data, f, ensure_ascii=False, indent=2)
-                        cd["synced_to_newapi"] = True  # 同步内存状态
+                        _rd = json.loads(_h["result_json"])
+                        if _rd.get("email") and (_rd.get("access_token") or _rd.get("refresh_token")):
+                            _cred_data_list.append(_rd)
+                    except Exception:
+                        pass
+        else:
+            # 兑换码系统未启用时，回退到扫描 credentials 文件
+            _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
+            if os.path.isdir(_cred_dir):
+                _cred_files = sorted(
+                    [f for f in os.listdir(_cred_dir) if f.startswith("credentials_") and f.endswith(".json")],
+                    reverse=True,
+                )
+                for _cf in _cred_files:
+                    _cf_path = os.path.join(_cred_dir, _cf)
+                    try:
+                        with open(_cf_path, encoding="utf-8") as _f:
+                            _cd = json.load(_f)
+                        _cd["_filename"] = _cf
+                        _cd["_filepath"] = _cf_path
+                        _cred_data_list.append(_cd)
                     except Exception:
                         pass
 
-                # ── 列表 (固定高度滚动) ──
-                with st.container(height=680):
-                    _hdr = st.columns([2.5, 1.2, 1.2, 1, 1])
-                    _hdr[0].markdown("**邮箱**")
-                    _hdr[1].markdown("**refresh_token**")
-                    _hdr[2].markdown("**access_token**")
-                    _hdr[3].markdown("**状态**")
-                    _hdr[4].markdown("**操作**")
-
-                    for _idx, _cd in enumerate(_cred_data_list):
-                        _email = _cd.get("email", "unknown")
-                        _has_rt = bool(_cd.get("refresh_token"))
-                        _is_synced = bool(_cd.get("synced_to_newapi"))
-                        _row = st.columns([2.5, 1.2, 1.2, 1, 1])
-                        _row[0].text(_email)
-                        _row[1].markdown("✅" if _has_rt else "❌")
-                        _row[2].markdown("✅" if _cd.get("access_token") else "❌")
-                        _row[3].markdown("✅ 已导入" if _is_synced else "⏳ 待导入")
-                        with _row[4]:
-                            if st.button(
-                                "已导入" if _is_synced else "导入",
-                                key=f"sync_single_{_idx}",
-                                disabled=not _newapi_base or not _newapi_token or not _has_rt or _is_synced,
-                            ):
-                                with st.spinner(f"导入 {_email}..."):
-                                    _sr = _do_newapi_import(
-                                        [_cd], _newapi_base, _newapi_token,
-                                        _newapi_type, _newapi_models, _newapi_group,
-                                        _newapi_priority, _newapi_weight,
-                                    )
-                                if _sr and _sr[0][1]:
-                                    st.success(f"✅ {_email} 导入成功")
-                                    st.rerun()
-                                elif _sr:
-                                    st.error(f"❌ {_email}: {_sr[0][2]}")
-
-                # ── 统计 ──
-                _synced_count = sum(1 for cd in _cred_data_list if cd.get("synced_to_newapi"))
-                st.caption(f"共 {len(_cred_data_list)} 个文件，已导入 {_synced_count} 个")
-
-                # ── 全部导入 (过滤已同步 + 无 refresh_token) ──
-                _syncable = [cd for cd in _cred_data_list
-                             if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
-                _sync_col1, _sync_col2 = st.columns([3, 1])
-                with _sync_col1:
-                    _sync_all_btn = st.button(
-                        f"全部导入 ({len(_syncable)} 个待同步)",
-                        type="primary", use_container_width=True, key="sync_all_btn",
-                        disabled=not _newapi_base or not _newapi_token or not _syncable,
-                    )
-                with _sync_col2:
-                    if st.button("刷新列表", key="sync_refresh"):
-                        st.rerun()
-
-                if not _newapi_base or not _newapi_token:
-                    st.warning("请先配置 API 地址和 Admin Token")
-
-                if _sync_all_btn:
-                    with st.spinner(f"正在导入 {len(_syncable)} 个账号..."):
-                        _import_results = _do_newapi_import(
-                            _syncable, _newapi_base, _newapi_token,
-                            _newapi_type, _newapi_models, _newapi_group,
-                            _newapi_priority, _newapi_weight,
+        if not _cred_data_list:
+            st.info("当前兑换码下暂无可同步的账号。注册成功后自动显示。")
+        else:
+            # ── 导入函数 (成功后回写 synced 标记) ──
+            def _do_newapi_import(cred_list, base_url, admin_token, ch_type, models, group, priority, weight):
+                """将 credentials 列表导入到 NewAPI，成功后标记 synced_to_newapi"""
+                import requests as _req
+                results = []
+                headers = {
+                    "Authorization": f"Bearer {admin_token}",
+                    "Content-Type": "application/json",
+                    "New-Api-User": "1",
+                }
+                base_url = base_url.rstrip("/")
+                for cd in cred_list:
+                    email = cd.get("email", "unknown")
+                    # 构建 key: 排除内部字段和 synced 标记
+                    key_data = {k: v for k, v in cd.items()
+                                if not k.startswith("_") and k != "synced_to_newapi"}
+                    key_json = json.dumps(key_data, ensure_ascii=False)
+                    payload = {
+                        "mode": "single",
+                        "channel": {
+                            "type": int(ch_type) if ch_type.isdigit() else 57,
+                            "name": f"codex-{email}",
+                            "key": key_json,
+                            "models": models.strip(),
+                            "group": group.strip(),
+                            "priority": int(priority) if str(priority).lstrip("-").isdigit() else 0,
+                            "weight": int(weight) if str(weight).lstrip("-").isdigit() else 0,
+                        },
+                    }
+                    try:
+                        resp = _req.post(
+                            f"{base_url}/api/channel/",
+                            headers=headers, json=payload, timeout=30,
                         )
-                    _ok = sum(1 for _, s, _ in _import_results if s)
-                    _fail = sum(1 for _, s, _ in _import_results if not s)
-                    if _ok:
-                        st.success(f"✅ 成功导入 {_ok} 个账号")
-                    if _fail:
-                        st.error(f"❌ 失败 {_fail} 个账号")
-                    for _email, _succ, _msg in _import_results:
-                        if _succ:
-                            st.write(f"✅ {_email}")
+                        if resp.status_code == 200:
+                            try:
+                                rj = resp.json()
+                                if rj.get("success"):
+                                    results.append((email, True, "成功"))
+                                    # 回写 synced 标记到 JSON 文件
+                                    _mark_synced(cd)
+                                else:
+                                    results.append((email, False, rj.get("message", resp.text[:200])))
+                            except Exception:
+                                results.append((email, False, f"返回非 JSON: {resp.text[:200]}"))
                         else:
-                            st.write(f"❌ {_email}: {_msg}")
-                    if _ok:
-                        st.rerun()
+                            results.append((email, False, f"HTTP {resp.status_code}: {resp.text[:200]}"))
+                    except Exception as e:
+                        results.append((email, False, f"请求异常: {str(e)[:200]}"))
+                return results
+
+            def _mark_synced(cd):
+                """导入成功后在 JSON 文件中标记 synced_to_newapi=true"""
+                filepath = cd.get("_filepath")
+                if not filepath:
+                    return
+                try:
+                    with open(filepath, encoding="utf-8") as f:
+                        data = json.load(f)
+                    data["synced_to_newapi"] = True
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    cd["synced_to_newapi"] = True  # 同步内存状态
+                except Exception:
+                    pass
+
+            # ── 列表 (固定高度滚动) ──
+            with st.container(height=680):
+                _hdr = st.columns([2.5, 1.2, 1.2, 1, 1])
+                _hdr[0].markdown("**邮箱**")
+                _hdr[1].markdown("**refresh_token**")
+                _hdr[2].markdown("**access_token**")
+                _hdr[3].markdown("**状态**")
+                _hdr[4].markdown("**操作**")
+
+                for _idx, _cd in enumerate(_cred_data_list):
+                    _email = _cd.get("email", "unknown")
+                    _has_rt = bool(_cd.get("refresh_token"))
+                    _is_synced = bool(_cd.get("synced_to_newapi"))
+                    _row = st.columns([2.5, 1.2, 1.2, 1, 1])
+                    _row[0].text(_email)
+                    _row[1].markdown("✅" if _has_rt else "❌")
+                    _row[2].markdown("✅" if _cd.get("access_token") else "❌")
+                    _row[3].markdown("✅ 已导入" if _is_synced else "⏳ 待导入")
+                    with _row[4]:
+                        if st.button(
+                            "已导入" if _is_synced else "导入",
+                            key=f"sync_single_{_idx}",
+                            disabled=not _newapi_base or not _newapi_token or not _has_rt or _is_synced,
+                        ):
+                            with st.spinner(f"导入 {_email}..."):
+                                _sr = _do_newapi_import(
+                                    [_cd], _newapi_base, _newapi_token,
+                                    _newapi_type, _newapi_models, _newapi_group,
+                                    _newapi_priority, _newapi_weight,
+                                )
+                            if _sr and _sr[0][1]:
+                                st.success(f"✅ {_email} 导入成功")
+                                st.rerun()
+                            elif _sr:
+                                st.error(f"❌ {_email}: {_sr[0][2]}")
+
+            # ── 统计 ──
+            _synced_count = sum(1 for cd in _cred_data_list if cd.get("synced_to_newapi"))
+            st.caption(f"共 {len(_cred_data_list)} 个账号，已导入 {_synced_count} 个")
+
+            # ── 全部导入 (过滤已同步 + 无 refresh_token) ──
+            _syncable = [cd for cd in _cred_data_list
+                         if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
+            _sync_col1, _sync_col2 = st.columns([3, 1])
+            with _sync_col1:
+                _sync_all_btn = st.button(
+                    f"全部导入 ({len(_syncable)} 个待同步)",
+                    type="primary", use_container_width=True, key="sync_all_btn",
+                    disabled=not _newapi_base or not _newapi_token or not _syncable,
+                )
+            with _sync_col2:
+                if st.button("刷新列表", key="sync_refresh"):
+                    st.rerun()
+
+            if not _newapi_base or not _newapi_token:
+                st.warning("请先配置 API 地址和 Admin Token")
+
+            if _sync_all_btn:
+                with st.spinner(f"正在导入 {len(_syncable)} 个账号..."):
+                    _import_results = _do_newapi_import(
+                        _syncable, _newapi_base, _newapi_token,
+                        _newapi_type, _newapi_models, _newapi_group,
+                        _newapi_priority, _newapi_weight,
+                    )
+                _ok = sum(1 for _, s, _ in _import_results if s)
+                _fail = sum(1 for _, s, _ in _import_results if not s)
+                if _ok:
+                    st.success(f"✅ 成功导入 {_ok} 个账号")
+                if _fail:
+                    st.error(f"❌ 失败 {_fail} 个账号")
+                for _email, _succ, _msg in _import_results:
+                    if _succ:
+                        st.write(f"✅ {_email}")
+                    else:
+                        st.write(f"❌ {_email}: {_msg}")
+                if _ok:
+                    st.rerun()
 
 # ════════════════════════════════════════
 # 所有 widget 渲染完毕后, 统一保存配置到兑换码数据库
