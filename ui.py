@@ -12,6 +12,8 @@ from collections import deque
 
 import streamlit as st
 
+st.set_page_config(page_title="Let's ABC", page_icon="💳", layout="wide", initial_sidebar_state="collapsed")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Config, CardInfo, BillingInfo, CaptchaConfig
@@ -35,6 +37,134 @@ except Exception:
     pass
 
 OUTPUT_DIR = "test_outputs"
+
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+
+def _load_config_defaults():
+    """启动时从 config.json 加载已保存的配置到 session_state 默认值"""
+    if st.session_state.get("_config_loaded"):
+        return
+    try:
+        if not os.path.isfile(_CONFIG_PATH):
+            return
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return
+
+    mapping = {
+        # 邮箱
+        "w_mail_worker_reg": ("mail", "worker_domain"),
+        "w_mail_domain_reg": ("mail", "email_domain"),
+        "w_mail_token_reg": ("mail", "admin_token"),
+        # 代理
+        "w_proxy": ("proxy",),
+        # 注册
+        "w_register_mode": ("register_mode",),
+        "w_default_password": ("default_password",),
+        # NewAPI
+        "w_newapi_base": ("newapi", "base_url"),
+        "w_newapi_token": ("newapi", "admin_token"),
+        "w_newapi_type": ("newapi", "channel_type"),
+        "w_newapi_models": ("newapi", "models"),
+        "w_newapi_group": ("newapi", "group"),
+        "w_newapi_priority": ("newapi", "priority"),
+        "w_newapi_weight": ("newapi", "weight"),
+        # 卡片
+        "w_card_number": ("card", "number"),
+        "w_card_cvc":    ("card", "cvc"),
+        "w_exp_month":   ("card", "exp_month"),
+        "w_exp_year":    ("card", "exp_year"),
+        # 账单
+        "w_billing_name":  ("billing", "name"),
+        "w_currency":      ("billing", "currency"),
+        "w_address_line1": ("billing", "address_line1"),
+        "w_address_state": ("billing", "address_state"),
+        "w_postal_code":   ("billing", "postal_code"),
+        "w_address_city":  ("billing", "city"),
+    }
+    for widget_key, path in mapping.items():
+        val = data
+        for p in path:
+            if isinstance(val, dict):
+                val = val.get(p)
+            else:
+                val = None
+                break
+        if val is not None and val != "":
+            st.session_state.setdefault(widget_key, str(val))
+
+    # 国家映射: billing.country → w_country selectbox label
+    bc = data.get("billing", {}).get("country", "")
+    if bc:
+        for label in COUNTRY_MAP:
+            if label.startswith(bc):
+                st.session_state.setdefault("w_country", label)
+                break
+
+    st.session_state["_config_loaded"] = True
+
+
+def _save_config_to_file(**overrides):
+    """将当前 UI 表单值写回 config.json (保留未涉及的字段)"""
+    try:
+        if os.path.isfile(_CONFIG_PATH):
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {}
+    except Exception:
+        data = {}
+
+    data.setdefault("mail", {})
+    data["mail"]["worker_domain"] = overrides.get("mail_worker", "") or st.session_state.get("w_mail_worker_reg", "")
+    data["mail"]["admin_token"]   = overrides.get("mail_token", "") or st.session_state.get("w_mail_token_reg", "")
+    data["mail"]["email_domain"]  = overrides.get("mail_domain", "") or st.session_state.get("w_mail_domain_reg", "")
+
+    data["proxy"] = overrides.get("proxy") or st.session_state.get("w_proxy", "") or None
+    data["register_mode"] = st.session_state.get("w_register_mode", "OTP 注册")
+    data["register_mode"] = "password" if "密码" in data["register_mode"] else "otp"
+    data["default_password"] = st.session_state.get("w_default_password", "") or None
+
+    # NewAPI
+    data.setdefault("newapi", {})
+    data["newapi"]["base_url"]     = st.session_state.get("w_newapi_base", "")
+    data["newapi"]["admin_token"]  = st.session_state.get("w_newapi_token", "")
+    data["newapi"]["channel_type"] = st.session_state.get("w_newapi_type", "57")
+    data["newapi"]["models"]       = st.session_state.get("w_newapi_models", "")
+    data["newapi"]["group"]        = st.session_state.get("w_newapi_group", "default,vip,svip")
+    data["newapi"]["priority"]     = st.session_state.get("w_newapi_priority", "0")
+    data["newapi"]["weight"]       = st.session_state.get("w_newapi_weight", "0")
+
+    data.setdefault("card", {})
+    data["card"]["number"]    = st.session_state.get("w_card_number", "")
+    data["card"]["cvc"]       = st.session_state.get("w_card_cvc", "")
+    data["card"]["exp_month"] = st.session_state.get("w_exp_month", "")
+    data["card"]["exp_year"]  = st.session_state.get("w_exp_year", "")
+
+    data.setdefault("billing", {})
+    data["billing"]["name"]          = st.session_state.get("w_billing_name", "")
+    data["billing"]["currency"]      = st.session_state.get("w_currency", "")
+    data["billing"]["address_line1"] = st.session_state.get("w_address_line1", "")
+    data["billing"]["address_state"] = st.session_state.get("w_address_state", "")
+    data["billing"]["postal_code"]   = st.session_state.get("w_postal_code", "")
+    data["billing"]["city"]          = st.session_state.get("w_address_city", "")
+    # 从 selectbox label 提取国家代码
+    country_label = st.session_state.get("w_country", "")
+    if country_label and country_label in COUNTRY_MAP:
+        data["billing"]["country"] = COUNTRY_MAP[country_label][0]
+
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.getLogger("ui").warning(f"保存 config.json 失败: {e}")
+
+
+def _on_config_change():
+    """widget 值变化时自动保存邮箱/代理配置到 config.json"""
+    _save_config_to_file()
 
 
 def _sanitize_error(raw_error: str) -> str:
@@ -397,28 +527,96 @@ st.set_page_config(page_title="Let's ABC", page_icon="A", layout="wide")
 # ── CSS ──
 st.markdown("""
 <style>
-    .block-container { max-width: 1100px; padding-top: 1.5rem; }
-    /* 更精细的排版 */
-    .stRadio > label { font-weight: 500; letter-spacing: 0.02em; }
-    .stRadio [data-baseweb="radio"] { gap: 0.3rem; }
-    .stTabs [data-baseweb="tab-list"] { gap: 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
-    .stTabs [data-baseweb="tab"] {
-        padding: 0.6rem 1.5rem; font-weight: 500; letter-spacing: 0.05em;
-        border-bottom: 2px solid transparent; transition: all 0.2s;
+    /* 终极真全屏宽度强制覆盖 */
+    html, body, [data-testid="stAppViewContainer"], .main {
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        overflow: hidden !important;
+        height: 100vh !important;
     }
-    .stTabs [aria-selected="true"] { border-bottom-color: #7c3aed; }
-    /* 进度条渐变 */
-    .stProgress > div > div > div { background: linear-gradient(90deg, #7c3aed, #3b82f6); }
-    /* 按键圆角 */
-    .stButton > button { border-radius: 8px; font-weight: 500; letter-spacing: 0.03em; transition: all 0.15s; }
-    .stButton > button[kind="primary"] { background: linear-gradient(135deg, #7c3aed, #6d28d9); border: none; }
-    .stButton > button[kind="primary"]:hover { background: linear-gradient(135deg, #6d28d9, #5b21b6); }
-    /* 输入框 */
-    .stTextInput > div > div > input { border-radius: 6px; }
-    /* Expander 样式 */
-    .streamlit-expanderHeader { font-weight: 500; letter-spacing: 0.02em; }
+    
+    .block-container {
+        max-width: 100% !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding-top: 1rem !important; 
+        padding-bottom: 0 !important;
+        padding-left: 2rem !important;  /* 左右左右稍留间隙 */
+        padding-right: 2rem !important; 
+        overflow: hidden !important;
+        height: 100vh !important;
+        font-family: 'Inter', system-ui, sans-serif;
+    }
+    
+    /* 隐藏默认 header 以节省空间 */
+    header[data-testid="stHeader"] { display: none !important; }
+    
+    /* 强行平分最外层三个列，设置独立滚动、等宽高宽满屏 */
+    div[data-testid="stVerticalBlock"] > div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        flex: 1 1 33.333% !important;
+        width: 33.333% !important;
+        min-width: 0 !important;
+        height: calc(100vh - 30px) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        padding: 0 1.5rem 2.5rem !important; /* 给底部增加 2.5rem 避免紧靠最下方边缘 */
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 0.5rem; /* 稍微控制组件间距 */
+    }
+    
+    /* 让中间列里的组件不被压缩 */
+    div[data-testid="column"] > div[data-testid="element-container"] { flex-shrink: 0; }
+    
+    /* 使中间栏的执行日志容器自动占满下方空间并和底部留微小间距 */
+    div[data-testid="column"]:nth-child(2) div[data-testid="stVerticalBlockBorderWrapper"],
+    div[data-testid="column"]:nth-child(2) div[style*="height: 750px"] {
+        flex-grow: 1 !important;
+        height: auto !important;
+        min-height: 400px;
+        margin-bottom: 5px !important;
+    }
+    div[data-testid="column"]:nth-child(2) div[data-testid="stVerticalBlockBorderWrapper"] > div {
+        max-height: 100% !important;
+        height: 100% !important;
+    }
+
+    /* 缩小滚动条，更美观 */
+    div[data-testid="column"]::-webkit-scrollbar { width: 4px; }
+    div[data-testid="column"]::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+
+    /* 选项卡排版优化 */
+    .stTabs [data-baseweb="tab-list"] { gap: 0.5rem; border-bottom: 2px solid #e2e8f0; }
+    .stTabs [data-baseweb="tab"] {
+        padding: 0.6rem 1.2rem; font-weight: 600; letter-spacing: 0.03em;
+        border-bottom: 2px solid transparent; transition: all 0.2s ease;
+        margin-bottom: -2px; color: #64748b;
+    }
+    .stTabs [aria-selected="true"] { border-bottom-color: #6366f1; color: #334155; }
+    
+    /* 进度条精细化 */
+    .stProgress > div > div > div { background: linear-gradient(90deg, #6366f1, #818cf8); border-radius: 4px; }
+    
+    /* 按钮质感 */
+    .stButton > button { border-radius: 8px; font-weight: 600; letter-spacing: 0.02em; transition: all 0.2s; border: 1px solid #e2e8f0; }
+    .stButton > button[kind="primary"] { background: linear-gradient(135deg, #6366f1, #4f46e5); border: none; color: #ffffff; box-shadow: 0 4px 6px -1px rgba(99, 102, 241, 0.2), 0 2px 4px -1px rgba(99, 102, 241, 0.1); }
+    .stButton > button[kind="primary"]:hover { transform: translateY(-1px); box-shadow: 0 6px 8px -1px rgba(99, 102, 241, 0.3), 0 3px 6px -1px rgba(99, 102, 241, 0.15); }
+    
+    /* 输入框与 Expander 卡片感 */
+    .stTextInput > div > div > input { border-radius: 8px; border: 1px solid #cbd5e1; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+    .stTextInput > div > div > input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2); }
+    
+    .streamlit-expanderHeader { font-weight: 600; letter-spacing: 0.02em; border-radius: 8px; }
+    [data-testid="stExpander"] { border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05); background-color: #ffffff; overflow: hidden; }
+    
     /* 分割线淡化 */
-    hr { opacity: 0.15; }
+    hr { opacity: 0.08; margin: 1.5em 0; border-top: 2px solid #cbd5e1; }
+    
+    /* dataframe 外边框 */
+    [data-testid="stDataFrame"] { border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -499,6 +697,9 @@ for _dk, _dv in _widget_defaults.items():
     if _dk not in st.session_state:
         st.session_state[_dk] = _dv
 
+# 从 config.json 加载已保存的配置 (覆盖硬编码默认值)
+_load_config_defaults()
+
 # ── 延迟的解析结果应用 (必须在 widget 渲染之前) ──
 _parse_just_applied = False
 if "_pending_parse" in st.session_state:
@@ -512,12 +713,8 @@ if "_pending_parse" in st.session_state:
 # 顶部
 # ════════════════════════════════════════
 st.markdown(
-    '<h1 style="text-align:center;letter-spacing:3px;">'
-    "Let's "
-    '<span style="font-family:\'Courier New\',monospace;font-weight:900;'
-    'background:linear-gradient(135deg,#7c3aed,#3b82f6);-webkit-background-clip:text;'
-    '-webkit-text-fill-color:transparent;font-size:1.15em;">ABC</span>'
-    ' <span style="font-size:0.5em;opacity:0.6;vertical-align:middle;">(Auto BindCard)</span>'
+    '<h1 style="text-align:center;letter-spacing:3px;color:#1e293b;margin-bottom:0.8rem;font-weight:800;">'
+    'OpenAI Auto Register &amp; Bind Card'
     '</h1>',
     unsafe_allow_html=True,
 )
@@ -563,294 +760,6 @@ if _code_info:
             st.session_state.verified_code = ""
             st.rerun()
 
-# ── 账号来源选择 ──
-# 从数据库获取当前兑换码的有 token 的执行记录 (用于「选择已有账号」)
-_code_history = get_code_history(st.session_state.verified_code) if _ENABLE_CODE_SYSTEM else []
-_code_success_creds = []
-for _h in _code_history:
-    if _h.get("result_json"):
-        try:
-            _rd = json.loads(_h["result_json"])
-            if _rd.get("email") and _rd.get("access_token"):
-                _code_success_creds.append(_rd)
-        except Exception:
-            pass
-
-acct_col, proxy_col = st.columns([3, 2])
-with acct_col:
-    account_source = st.radio(
-        "账号来源",
-        ["新注册", "选择已有账号", "手动输入 Token"],
-        index=1 if _code_success_creds else 0,
-        horizontal=True,
-    )
-    do_register = account_source == "新注册"
-
-do_checkout = True
-do_payment = True
-
-if dev_mode:
-    with proxy_col:
-        sc1, sc2 = st.columns(2)
-        do_checkout = sc1.checkbox("创建 Checkout", value=True)
-        do_payment = sc2.checkbox("提交支付", value=True)
-
-with proxy_col:
-    proxy = st.text_input("代理", placeholder="http://127.0.0.1:7897", key="w_proxy")
-
-# ── 已有账号选择 / Token 输入 ──
-cred_email = ""
-cred_session_token = ""
-cred_access_token = ""
-cred_device_id = ""
-use_existing_creds = not do_register
-
-if account_source == "选择已有账号":
-    if _code_success_creds:
-        _cred_options = {}
-        for _cd in _code_success_creds:
-            _label = f"{_cd.get('email', '未知')}"
-            _cred_options[_label] = _cd
-        if _cred_options:
-            sel_label = st.selectbox("选择账号", list(_cred_options.keys()), key="w_acct_select")
-            _sel_data = _cred_options[sel_label]
-            cred_email = _sel_data.get("email", "")
-            cred_session_token = _sel_data.get("session_token", "")
-            cred_access_token = _sel_data.get("access_token", "")
-            cred_device_id = _sel_data.get("device_id", "")
-            with st.expander("查看凭证详情", expanded=False):
-                st.json({k: (v[:40] + "..." if isinstance(v, str) and len(v) > 50 else v) for k, v in _sel_data.items()})
-        else:
-            st.warning("未找到有效的凭证")
-    else:
-        st.warning("暂无已注册的账号，请先选择「新注册」")
-
-elif account_source == "手动输入 Token":
-    cred_access_token = st.text_input("access_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_at")
-    cred_session_token = st.text_input("session_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_st",
-                                        help="浏览器 F12 → Application → Cookies → __Secure-next-auth.session-token")
-    cred_email = st.text_input("邮箱 (可选)", placeholder="user@example.com", key="w_manual_email")
-
-# ── 注册模式下显示邮箱配置 ──
-if do_register:
-    with st.expander("邮箱配置", expanded=True):
-        _mc1, _mc2, _mc3 = st.columns(3)
-        mail_worker = _mc1.text_input("Worker API", placeholder="https://mail-api.example.com", key="w_mail_worker_reg")
-        mail_domain = _mc2.text_input("邮箱域名", placeholder="example.com", key="w_mail_domain_reg")
-        mail_token = _mc3.text_input("密码", placeholder="your-mail-token", type="password", key="w_mail_token_reg")
-
-
-# 默认值 (非开发者模式下不显示这些设置)
-use_browser_mode = True
-captcha_key = ""
-captcha_api_url = ""
-if not do_register:
-    # 非注册模式时，邮箱配置使用空默认值 (开发者模式下有单独的输入框)
-    mail_worker = ""
-    mail_domain = ""
-    mail_token = ""
-# 计划类型选择 (始终可见)
-plan_type_label = st.radio(
-    "选择计划",
-    ["Business · 团队版免费试用 1 个月", "Plus · 个人版免费试用 1 个月"],
-    index=0,
-    horizontal=True,
-)
-plan_type = "plus" if "Plus" in plan_type_label else "team"
-if plan_type == "plus":
-    workspace_name = ""
-    seat_quantity = 0
-    promo_campaign = "plus-1-month-free"
-else:
-    workspace_name = "MyWorkspace"
-    seat_quantity = 5
-    promo_campaign = "team-1-month-free"
-
-if dev_mode:
-    with st.expander("高级设置", expanded=False):
-        adv_col1, adv_col2 = st.columns(2)
-        with adv_col1:
-            payment_mode = st.radio(
-                "支付模式",
-                ["浏览器模式 (推荐)", "API 模式"],
-                index=0,
-                horizontal=True,
-            )
-            use_browser_mode = payment_mode.startswith("浏览")
-        with adv_col2:
-            if use_browser_mode:
-                import subprocess as _sp
-                _xvfb_running = False
-                try:
-                    _xvfb_pids = _sp.check_output(["pgrep", "-f", "Xvfb :99"], stderr=_sp.DEVNULL).decode().strip()
-                    _xvfb_running = bool(_xvfb_pids)
-                except Exception:
-                    pass
-                if _xvfb_running:
-                    st.success("Xvfb 运行中 (:99)")
-                else:
-                    st.info("将自动启动 Xvfb :99")
-            else:
-                st.info("API 模式")
-
-        if not use_browser_mode:
-            captcha_col1, captcha_col2 = st.columns([3, 1])
-            with captcha_col1:
-                captcha_key = st.text_input("YesCaptcha API Key", placeholder="your-yescaptcha-key", type="password")
-            with captcha_col2:
-                captcha_api_url = st.text_input("打码 API", value="https://api.yescaptcha.com")
-
-        st.markdown("---")
-        st.markdown("**邮箱 & 计划设置**")
-        if not do_register:
-            mail_worker = st.text_input("邮箱 Worker", placeholder="https://mail-api.example.com", key="w_mail_worker_dev")
-            adv_mc1, adv_mc2 = st.columns(2)
-            mail_domain = adv_mc1.text_input("邮箱域名", placeholder="example.com", key="w_mail_domain_dev")
-            mail_token = adv_mc2.text_input("密码", placeholder="your-mail-token", type="password", key="w_mail_token_dev")
-        if plan_type == "team":
-            adv_tc1, adv_tc2, adv_tc3 = st.columns(3)
-            workspace_name = adv_tc1.text_input("Workspace", value="MyWorkspace")
-            seat_quantity = adv_tc2.number_input("席位数", min_value=2, max_value=50, value=5)
-            promo_campaign = adv_tc3.text_input("活动 ID", value="team-1-month-free")
-        else:
-            promo_campaign = st.text_input("活动 ID", value="plus-1-month-free")
-
-st.divider()
-
-# ════════════════════════════════════════
-# 配置区: 卡片信息优先
-# ════════════════════════════════════════
-
-if do_payment:
-    with st.expander("粘贴卡片信息", expanded=True):
-        paste_text = st.text_area(
-            "粘贴卡片/账单文本",
-            height=120,
-            placeholder="支持两种格式:\n\n格式1 (键值对):\n卡号: 4242424242424242\n有效期: 1230\nCVV: 123\n姓名: John Smith\n地址: 123 Main Street\n城市: San Francisco\n州: CA\n邮编: 94102\n国家: United States\n\n格式2 (纯文本):\n4242 4242 4242 4242\n12/30\nCVV 123",
-            key="paste_card_text",
-        )
-        if st.button("识别并填充", key="parse_btn", disabled=not paste_text):
-            parsed = _parse_card_text(paste_text)
-            pending = {}
-            if parsed.get("card_number"):
-                pending["w_card_number"] = parsed["card_number"]
-            if parsed.get("exp_month"):
-                pending["w_exp_month"] = parsed["exp_month"]
-            if parsed.get("exp_year"):
-                pending["w_exp_year"] = parsed["exp_year"]
-            if parsed.get("cvv"):
-                pending["w_card_cvc"] = parsed["cvv"]
-            if parsed.get("address_line1"):
-                pending["w_address_line1"] = parsed["address_line1"]
-            if parsed.get("address_city"):
-                pending["w_address_city"] = parsed["address_city"]
-            if parsed.get("address_state"):
-                pending["w_address_state"] = parsed["address_state"]
-            if parsed.get("postal_code"):
-                pending["w_postal_code"] = parsed["postal_code"]
-            if parsed.get("country_code"):
-                cc = parsed["country_code"]
-                for i, label in enumerate(COUNTRY_MAP.keys()):
-                    if label.startswith(cc):
-                        pending["w_country"] = label
-                        break
-            if parsed.get("currency"):
-                pending["w_currency"] = parsed["currency"]
-            if parsed.get("billing_name"):
-                pending["w_billing_name"] = parsed["billing_name"]
-            st.session_state["_pending_parse"] = pending
-            filled = []
-            if parsed.get("card_number"):
-                filled.append(f"卡号: {parsed['card_number'][:4]}****{parsed['card_number'][-4:]}")
-            if parsed.get("exp_month"):
-                filled.append(f"有效期: {parsed['exp_month']}/{parsed['exp_year']}")
-            if parsed.get("cvv"):
-                filled.append(f"CVV: ***")
-            if parsed.get("raw_address"):
-                filled.append(f"地址: {parsed['raw_address']}")
-            if parsed.get("billing_name"):
-                filled.append(f"姓名: {parsed['billing_name']}")
-            if filled:
-                st.success("已识别: " + " | ".join(filled))
-            else:
-                st.warning("未能识别卡片信息，请检查文本格式")
-            st.rerun()
-
-cfg_col1, cfg_col2 = st.columns(2)
-
-with cfg_col1:
-    if do_payment:
-        with st.expander("信用卡", expanded=True):
-            TEST_CARDS = {
-                "4242 4242 4242 4242 (Visa 标准)": ("4242424242424242", "123"),
-                "4000 0000 0000 0002 (Visa 被拒)": ("4000000000000002", "123"),
-                "4000 0000 0000 0069 (Visa 过期)": ("4000000000000069", "123"),
-                "4000 0000 0000 9995 (Visa 余额不足)": ("4000000000009995", "123"),
-                "5555 5555 5555 4444 (Mastercard)": ("5555555555554444", "123"),
-                "5200 8282 8282 8210 (MC Debit)": ("5200828282828210", "123"),
-                "2223 0031 2200 3222 (MC 2系列)": ("2223003122003222", "123"),
-                "3782 822463 10005 (Amex)": ("378282246310005", "1234"),
-            }
-            tc_sel = st.selectbox("快速填充测试卡", ["不填充"] + list(TEST_CARDS.keys()), key="tc_sel")
-            if tc_sel != "不填充":
-                tc_num, tc_cvc = TEST_CARDS[tc_sel]
-                st.session_state["w_card_number"] = tc_num
-                st.session_state["w_card_cvc"] = tc_cvc
-
-            cc1, cc2, cc3, cc4 = st.columns([5, 2, 2, 2])
-            card_number = cc1.text_input("卡号", placeholder="真实卡号", key="w_card_number")
-            exp_month = cc2.text_input("月", key="w_exp_month")
-            exp_year = cc3.text_input("年", key="w_exp_year")
-            card_cvc = cc4.text_input("CVC", key="w_card_cvc")
-
-            if card_number and card_number.startswith("4"):
-                st.caption("Live 模式下所有测试卡都会被拒绝，仅用于验证流程")
-    else:
-        card_number = exp_month = exp_year = card_cvc = ""
-
-with cfg_col2:
-    with st.expander("账单地址", expanded=True):
-        # 如果有解析出的国家，自动选择对应国家
-        country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country")
-        country_code, default_currency, default_state, default_addr, default_zip = COUNTRY_MAP[country_label]
-        # 当国家变更时，更新地址默认值 (但不覆盖刚解析的值)
-        _prev_country = st.session_state.get("_prev_country", "")
-        if _prev_country and _prev_country != country_label and not _parse_just_applied:
-            st.session_state["w_currency"] = default_currency
-            st.session_state["w_address_line1"] = default_addr
-            st.session_state["w_address_state"] = default_state
-            st.session_state["w_postal_code"] = default_zip
-        st.session_state["_prev_country"] = country_label
-        bc1, bc2 = st.columns(2)
-        billing_name = bc1.text_input("姓名", key="w_billing_name")
-        if "w_currency" not in st.session_state:
-            st.session_state["w_currency"] = default_currency
-        currency = bc2.text_input("货币", key="w_currency")
-        bc3, bc4, bc5, bc6 = st.columns(4)
-        if "w_address_line1" not in st.session_state:
-            st.session_state["w_address_line1"] = default_addr
-        if "w_address_city" not in st.session_state:
-            st.session_state["w_address_city"] = ""
-        if "w_address_state" not in st.session_state:
-            st.session_state["w_address_state"] = default_state
-        if "w_postal_code" not in st.session_state:
-            st.session_state["w_postal_code"] = default_zip
-        address_line1 = bc3.text_input("地址", key="w_address_line1")
-        address_city = bc4.text_input("城市", key="w_address_city")
-        address_state = bc5.text_input("州/省", key="w_address_state")
-        postal_code = bc6.text_input("邮编", key="w_postal_code")
-
-st.divider()
-
-# ════════════════════════════════════════
-# Tab
-# ════════════════════════════════════════
-steps_list = []
-if do_register: steps_list.append("注册")
-if do_checkout: steps_list.append("Checkout")
-if do_payment: steps_list.append("支付")
-
-tab_run, tab_accounts, tab_history = st.tabs(["执行", "账号", "历史"])
 
 # 日志关键词 → 进度百分比映射
 _PROGRESS_KEYWORDS = [
@@ -922,7 +831,10 @@ def _run_flow_thread(rd, cs):
         if cs["do_register"]:
             mp = MailProvider(worker_domain=cfg.mail.worker_domain, admin_token=cfg.mail.admin_token, email_domain=cfg.mail.email_domain)
             af = AuthFlow(cfg)
-            auth_result = af.run_register(mp)
+            if cs.get("register_mode") == "password":
+                auth_result = af.run_register_with_password(mp, password=cs.get("default_password", ""))
+            else:
+                auth_result = af.run_register(mp)
             rd["email"] = auth_result.email
             rd["session_token"] = auth_result.session_token
             rd["access_token"] = auth_result.access_token
@@ -947,17 +859,19 @@ def _run_flow_thread(rd, cs):
 
             if cs["use_browser_mode"] and cs["do_payment"]:
                 import subprocess as _sp
-                _xvfb_ok = False
-                try:
-                    _sp.check_output(["pgrep", "-f", "Xvfb :99"], stderr=_sp.DEVNULL)
-                    _xvfb_ok = True
-                except Exception:
-                    pass
-                if not _xvfb_ok:
-                    _sp.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-ac"],
-                              stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-                    import time as _t; _t.sleep(1)
-                os.environ["DISPLAY"] = ":99"
+                import sys as _sys
+                if _sys.platform.startswith("linux"):
+                    _xvfb_ok = False
+                    try:
+                        _sp.check_output(["pgrep", "-f", "Xvfb :99"], stderr=_sp.DEVNULL)
+                        _xvfb_ok = True
+                    except Exception:
+                        pass
+                    if not _xvfb_ok:
+                        _sp.Popen(["Xvfb", ":99", "-screen", "0", "1920x1080x24", "-ac"],
+                                  stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+                        import time as _t; _t.sleep(1)
+                    os.environ["DISPLAY"] = ":99"
 
                 from browser_payment import BrowserPayment
                 bp = BrowserPayment(proxy=cfg.proxy, headless=False, slow_mo=80)
@@ -1020,12 +934,327 @@ def _run_flow_thread(rd, cs):
         pass
 
 
-with tab_run:
-    # 额度提示
+
+# ════════════════════════════════════════
+# ════════════════════════════════════════
+# 布局分栏 (左中右)
+# ════════════════════════════════════════
+# 左右顶格展示，三块三等分
+col_left, col_mid, col_right = st.columns([1, 1, 1], gap="medium")
+
+with col_left:
+    # ── 账号来源选择 ──
+    # 从数据库获取当前兑换码的有 token 的执行记录 (用于「选择已有账号」)
+    _code_history = get_code_history(st.session_state.verified_code) if _ENABLE_CODE_SYSTEM else []
+    _code_success_creds = []
+    for _h in _code_history:
+        if _h.get("result_json"):
+            try:
+                _rd = json.loads(_h["result_json"])
+                if _rd.get("email") and _rd.get("access_token"):
+                    _code_success_creds.append(_rd)
+            except Exception:
+                pass
+
+    acct_col, proxy_col = st.columns([3, 2])
+    with acct_col:
+        account_source = st.radio(
+            "账号来源",
+            ["新注册", "选择已有账号", "手动输入 Token"],
+            index=1 if _code_success_creds else 0,
+            horizontal=True,
+        )
+        do_register = account_source == "新注册"
+
+    do_checkout = True
+    do_payment = True
+
+    if dev_mode:
+        with proxy_col:
+            sc1, sc2 = st.columns(2)
+            do_checkout = sc1.checkbox("创建 Checkout", value=True)
+            do_payment = sc2.checkbox("提交支付", value=True)
+
+    with proxy_col:
+        proxy = st.text_input("代理", placeholder="http://127.0.0.1:7897", key="w_proxy", on_change=_on_config_change)
+
+    # ── 已有账号选择 / Token 输入 ──
+    cred_email = ""
+    cred_session_token = ""
+    cred_access_token = ""
+    cred_device_id = ""
+    use_existing_creds = not do_register
+
+    if account_source == "选择已有账号":
+        if _code_success_creds:
+            _cred_options = {}
+            for _cd in _code_success_creds:
+                _label = f"{_cd.get('email', '未知')}"
+                _cred_options[_label] = _cd
+            if _cred_options:
+                sel_label = st.selectbox("选择账号", list(_cred_options.keys()), key="w_acct_select")
+                _sel_data = _cred_options[sel_label]
+                cred_email = _sel_data.get("email", "")
+                cred_session_token = _sel_data.get("session_token", "")
+                cred_access_token = _sel_data.get("access_token", "")
+                cred_device_id = _sel_data.get("device_id", "")
+                with st.expander("查看凭证详情", expanded=False):
+                    st.json({k: (v[:40] + "..." if isinstance(v, str) and len(v) > 50 else v) for k, v in _sel_data.items()})
+            else:
+                st.warning("未找到有效的凭证")
+        else:
+            st.warning("暂无已注册的账号，请先选择「新注册」")
+
+    elif account_source == "手动输入 Token":
+        cred_access_token = st.text_input("access_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_at")
+        cred_session_token = st.text_input("session_token", placeholder="eyJhbGciOi...", type="password", key="w_manual_st",
+                                            help="浏览器 F12 → Application → Cookies → __Secure-next-auth.session-token")
+        cred_email = st.text_input("邮箱 (可选)", placeholder="user@example.com", key="w_manual_email")
+
+    # ── 注册模式下显示邮箱配置 ──
     if do_register:
-        st.info("新注册模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
+        with st.expander("邮箱配置", expanded=True):
+            _mc1, _mc2, _mc3 = st.columns(3)
+            mail_worker = _mc1.text_input("Worker API", placeholder="https://mail-api.example.com", key="w_mail_worker_reg", on_change=_on_config_change)
+            mail_domain = _mc2.text_input("邮箱域名", placeholder="example.com", key="w_mail_domain_reg", on_change=_on_config_change)
+            mail_token = _mc3.text_input("密码", placeholder="your-mail-token", type="password", key="w_mail_token_reg", on_change=_on_config_change)
+        with st.expander("注册模式", expanded=True):
+            _rm_col1, _rm_col2 = st.columns(2)
+            register_mode_label = _rm_col1.radio(
+                "注册方式",
+                ["OTP 注册", "密码注册"],
+                index=1 if st.session_state.get("w_register_mode", "OTP 注册") != "OTP 注册" else 0,
+                horizontal=True,
+                key="w_register_mode",
+                on_change=_on_config_change,
+            )
+            is_password_mode = "密码" in (register_mode_label or "")
+            if is_password_mode:
+                default_password = _rm_col2.text_input(
+                    "注册密码", placeholder="留空则自动生成 14 位密码",
+                    key="w_default_password", on_change=_on_config_change,
+                    help="密码要求: 至少1个大写、1个小写、1个数字、1个特殊字符",
+                )
+            else:
+                default_password = ""
     else:
-        st.info("已有账号模式: 消耗 **1** 次额度")
+        is_password_mode = False
+        default_password = ""
+
+
+    # 默认值 (非开发者模式下不显示这些设置)
+    use_browser_mode = True
+    captcha_key = ""
+    captcha_api_url = ""
+    if not do_register:
+        # 非注册模式时，邮箱配置使用空默认值 (开发者模式下有单独的输入框)
+        mail_worker = ""
+        mail_domain = ""
+        mail_token = ""
+    # 计划类型选择 (始终可见)
+    plan_type_label = st.radio(
+        "选择计划",
+        ["Business · 团队版免费试用 1 个月", "Plus · 个人版免费试用 1 个月"],
+        index=0,
+        horizontal=True,
+    )
+    plan_type = "plus" if "Plus" in plan_type_label else "team"
+    if plan_type == "plus":
+        workspace_name = ""
+        seat_quantity = 0
+        promo_campaign = "plus-1-month-free"
+    else:
+        workspace_name = "MyWorkspace"
+        seat_quantity = 5
+        promo_campaign = "team-1-month-free"
+
+    if dev_mode:
+        with st.expander("高级设置", expanded=False):
+            adv_col1, adv_col2 = st.columns(2)
+            with adv_col1:
+                payment_mode = st.radio(
+                    "支付模式",
+                    ["浏览器模式 (推荐)", "API 模式"],
+                    index=0,
+                    horizontal=True,
+                )
+                use_browser_mode = payment_mode.startswith("浏览")
+            with adv_col2:
+                if use_browser_mode:
+                    import subprocess as _sp
+                    _xvfb_running = False
+                    try:
+                        _xvfb_pids = _sp.check_output(["pgrep", "-f", "Xvfb :99"], stderr=_sp.DEVNULL).decode().strip()
+                        _xvfb_running = bool(_xvfb_pids)
+                    except Exception:
+                        pass
+                    if _xvfb_running:
+                        st.success("Xvfb 运行中 (:99)")
+                    else:
+                        st.info("将自动启动 Xvfb :99")
+                else:
+                    st.info("API 模式")
+
+            if not use_browser_mode:
+                captcha_col1, captcha_col2 = st.columns([3, 1])
+                with captcha_col1:
+                    captcha_key = st.text_input("YesCaptcha API Key", placeholder="your-yescaptcha-key", type="password")
+                with captcha_col2:
+                    captcha_api_url = st.text_input("打码 API", value="https://api.yescaptcha.com")
+
+            st.markdown("---")
+            st.markdown("**邮箱 & 计划设置**")
+            if not do_register:
+                mail_worker = st.text_input("邮箱 Worker", placeholder="https://mail-api.example.com", key="w_mail_worker_dev")
+                adv_mc1, adv_mc2 = st.columns(2)
+                mail_domain = adv_mc1.text_input("邮箱域名", placeholder="example.com", key="w_mail_domain_dev")
+                mail_token = adv_mc2.text_input("密码", placeholder="your-mail-token", type="password", key="w_mail_token_dev")
+            if plan_type == "team":
+                adv_tc1, adv_tc2, adv_tc3 = st.columns(3)
+                workspace_name = adv_tc1.text_input("Workspace", value="MyWorkspace")
+                seat_quantity = adv_tc2.number_input("席位数", min_value=2, max_value=50, value=5)
+                promo_campaign = adv_tc3.text_input("活动 ID", value="team-1-month-free")
+            else:
+                promo_campaign = st.text_input("活动 ID", value="plus-1-month-free")
+
+    # ════════════════════════════════════════
+    # 配置区: 卡片信息优先 (去除原来的 divider 避免上方留白)
+    # ════════════════════════════════════════
+
+    if do_payment:
+        with st.expander("粘贴卡片信息", expanded=True):
+            paste_text = st.text_area(
+                "粘贴卡片/账单文本",
+                height=120,
+                placeholder="支持两种格式:\n\n格式1 (键值对):\n卡号: 4242424242424242\n有效期: 1230\nCVV: 123\n姓名: John Smith\n地址: 123 Main Street\n城市: San Francisco\n州: CA\n邮编: 94102\n国家: United States\n\n格式2 (纯文本):\n4242 4242 4242 4242\n12/30\nCVV 123",
+                key="paste_card_text",
+            )
+            if st.button("识别并填充", key="parse_btn", disabled=not paste_text):
+                parsed = _parse_card_text(paste_text)
+                pending = {}
+                if parsed.get("card_number"):
+                    pending["w_card_number"] = parsed["card_number"]
+                if parsed.get("exp_month"):
+                    pending["w_exp_month"] = parsed["exp_month"]
+                if parsed.get("exp_year"):
+                    pending["w_exp_year"] = parsed["exp_year"]
+                if parsed.get("cvv"):
+                    pending["w_card_cvc"] = parsed["cvv"]
+                if parsed.get("address_line1"):
+                    pending["w_address_line1"] = parsed["address_line1"]
+                if parsed.get("address_city"):
+                    pending["w_address_city"] = parsed["address_city"]
+                if parsed.get("address_state"):
+                    pending["w_address_state"] = parsed["address_state"]
+                if parsed.get("postal_code"):
+                    pending["w_postal_code"] = parsed["postal_code"]
+                if parsed.get("country_code"):
+                    cc = parsed["country_code"]
+                    for i, label in enumerate(COUNTRY_MAP.keys()):
+                        if label.startswith(cc):
+                            pending["w_country"] = label
+                            break
+                if parsed.get("currency"):
+                    pending["w_currency"] = parsed["currency"]
+                if parsed.get("billing_name"):
+                    pending["w_billing_name"] = parsed["billing_name"]
+                st.session_state["_pending_parse"] = pending
+                filled = []
+                if parsed.get("card_number"):
+                    filled.append(f"卡号: {parsed['card_number'][:4]}****{parsed['card_number'][-4:]}")
+                if parsed.get("exp_month"):
+                    filled.append(f"有效期: {parsed['exp_month']}/{parsed['exp_year']}")
+                if parsed.get("cvv"):
+                    filled.append(f"CVV: ***")
+                if parsed.get("raw_address"):
+                    filled.append(f"地址: {parsed['raw_address']}")
+                if parsed.get("billing_name"):
+                    filled.append(f"姓名: {parsed['billing_name']}")
+                if filled:
+                    st.success("已识别: " + " | ".join(filled))
+                else:
+                    st.warning("未能识别卡片信息，请检查文本格式")
+                st.rerun()
+
+    cfg_col1, cfg_col2 = st.columns(2)
+
+    with cfg_col1:
+        if do_payment:
+            with st.expander("信用卡", expanded=True):
+                TEST_CARDS = {
+                    "4242 4242 4242 4242 (Visa 标准)": ("4242424242424242", "123"),
+                    "4000 0000 0000 0002 (Visa 被拒)": ("4000000000000002", "123"),
+                    "4000 0000 0000 0069 (Visa 过期)": ("4000000000000069", "123"),
+                    "4000 0000 0000 9995 (Visa 余额不足)": ("4000000000009995", "123"),
+                    "5555 5555 5555 4444 (Mastercard)": ("5555555555554444", "123"),
+                    "5200 8282 8282 8210 (MC Debit)": ("5200828282828210", "123"),
+                    "2223 0031 2200 3222 (MC 2系列)": ("2223003122003222", "123"),
+                    "3782 822463 10005 (Amex)": ("378282246310005", "1234"),
+                }
+                tc_sel = st.selectbox("快速填充测试卡", ["不填充"] + list(TEST_CARDS.keys()), key="tc_sel")
+                if tc_sel != "不填充":
+                    tc_num, tc_cvc = TEST_CARDS[tc_sel]
+                    st.session_state["w_card_number"] = tc_num
+                    st.session_state["w_card_cvc"] = tc_cvc
+
+                cc1, cc2, cc3, cc4 = st.columns([5, 2, 2, 2])
+                card_number = cc1.text_input("卡号", placeholder="真实卡号", key="w_card_number")
+                exp_month = cc2.text_input("月", key="w_exp_month")
+                exp_year = cc3.text_input("年", key="w_exp_year")
+                card_cvc = cc4.text_input("CVC", key="w_card_cvc")
+
+                if card_number and card_number.startswith("4"):
+                    st.caption("Live 模式下所有测试卡都会被拒绝，仅用于验证流程")
+        else:
+            card_number = exp_month = exp_year = card_cvc = ""
+
+    with cfg_col2:
+        with st.expander("账单地址", expanded=True):
+            # 如果有解析出的国家，自动选择对应国家
+            country_label = st.selectbox("国家", list(COUNTRY_MAP.keys()), key="w_country")
+            country_code, default_currency, default_state, default_addr, default_zip = COUNTRY_MAP[country_label]
+            # 当国家变更时，更新地址默认值 (但不覆盖刚解析的值)
+            _prev_country = st.session_state.get("_prev_country", "")
+            if _prev_country and _prev_country != country_label and not _parse_just_applied:
+                st.session_state["w_currency"] = default_currency
+                st.session_state["w_address_line1"] = default_addr
+                st.session_state["w_address_state"] = default_state
+                st.session_state["w_postal_code"] = default_zip
+            st.session_state["_prev_country"] = country_label
+            bc1, bc2 = st.columns(2)
+            billing_name = bc1.text_input("姓名", key="w_billing_name")
+            if "w_currency" not in st.session_state:
+                st.session_state["w_currency"] = default_currency
+            currency = bc2.text_input("货币", key="w_currency")
+            bc3, bc4, bc5, bc6 = st.columns(4)
+            if "w_address_line1" not in st.session_state:
+                st.session_state["w_address_line1"] = default_addr
+            if "w_address_city" not in st.session_state:
+                st.session_state["w_address_city"] = ""
+            if "w_address_state" not in st.session_state:
+                st.session_state["w_address_state"] = default_state
+            if "w_postal_code" not in st.session_state:
+                st.session_state["w_postal_code"] = default_zip
+            address_line1 = bc3.text_input("地址", key="w_address_line1")
+            address_city = bc4.text_input("城市", key="w_address_city")
+            address_state = bc5.text_input("州/省", key="w_address_state")
+            postal_code = bc6.text_input("邮编", key="w_postal_code")
+
+    st.divider()
+
+
+steps_list = []
+if do_register: steps_list.append("注册")
+if do_checkout: steps_list.append("Checkout")
+if do_payment: steps_list.append("支付")
+
+
+with col_mid:
+    # 额度提示
+    # if do_register:
+    #     st.info("新注册模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
+    # else:
+    #     st.info("已有账号模式: 消耗 **1** 次额度")
     btn_col1, btn_col2 = st.columns([4, 1])
     with btn_col1:
         run_btn = st.button("开始执行", disabled=st.session_state.running or not steps_list,
@@ -1080,6 +1309,12 @@ with tab_run:
         if _exec_id:
             update_execution(_exec_id, status="running")
 
+        # 保存当前配置到 config.json
+        _save_config_to_file(
+            proxy=proxy, mail_worker=mail_worker,
+            mail_domain=mail_domain, mail_token=mail_token,
+        )
+
         st.session_state._flow_config = {
             "proxy": proxy or None,
             "mail_domain": mail_domain, "mail_worker": mail_worker, "mail_token": mail_token,
@@ -1097,6 +1332,8 @@ with tab_run:
             "use_existing_creds": use_existing_creds, "use_browser_mode": use_browser_mode,
             "cred_session_token": cred_session_token, "cred_access_token": cred_access_token,
             "cred_device_id": cred_device_id, "cred_email": cred_email,
+            "register_mode": "password" if is_password_mode else "otp",
+            "default_password": default_password,
         }
         st.session_state._flow_result = {"success": False, "error": "", "email": "", "steps": {}}
         st.session_state.running = True
@@ -1134,7 +1371,7 @@ with tab_run:
         pct = _calc_progress_pct()
         st.progress(pct / 100.0)
         st.markdown(
-            f'<div style="text-align:center;font-size:28px;font-weight:bold;margin:-15px 0 10px">{pct}%</div>',
+            f'<div style="text-align:center;font-size:28px;font-weight:bold;margin:-15px 0 10px;color:#2d3436">{pct}%</div>',
             unsafe_allow_html=True,
         )
         rd = st.session_state.get("_flow_result", {})
@@ -1183,82 +1420,314 @@ with tab_run:
                     st.code("\n".join(st.session_state.log_buffer[-200:]), language="log")
 
 
-# Tab: 账号
-# ════════════════════════════════════════
-with tab_accounts:
-    _history = get_code_history(st.session_state.verified_code)
-    # 显示所有有邮箱的账号 (注册成功的, 不管支付是否成功)
-    _acct_rows = []
-    for r in _history:
-        if r.get("result_json"):
-            try:
-                rd = json.loads(r["result_json"])
-                if rd.get("email"):
-                    _acct_rows.append({
-                        "exec_id": r["id"],
-                        "email": rd["email"],
-                        "plan_type": r.get("plan_type") or "-",
-                        "status": r["status"],
-                        "created_at": r["created_at"][:19],
-                        "has_token": bool(rd.get("access_token")),
-                        "_data": rd,
-                    })
-            except Exception:
-                pass
+    st.divider()
+    st.markdown("**执行日志 (Live Logs)**")
+    pull_captured_logs()
+    
+    # 日志区固定高度自动滚动
+    with st.container(height=750):
+        if st.session_state.log_buffer:
+            st.code("\n".join(st.session_state.log_buffer[-150:]), language="log")
+        else:
+            st.info("等待执行...")
 
-    if _acct_rows:
-        import pandas as pd
-        _disp_rows = []
-        for a in _acct_rows:
-            _disp_rows.append({
-                "邮箱": a["email"],
-                "计划": a["plan_type"],
-                "支付": "✅ 成功" if a["status"] == "success" else "❌ 失败",
-                "时间": a["created_at"],
-            })
-        st.dataframe(pd.DataFrame(_disp_rows), hide_index=True, use_container_width=True)
-        st.caption(f"共 {len(_acct_rows)} 个账号")
-
-        st.divider()
-        for idx, acct in enumerate(_acct_rows):
-            _data = acct["_data"]
-            with st.expander(f"{acct['email']}  {'✅' if acct['status'] == 'success' else '❌'}", expanded=False):
-                if _data.get("access_token"):
-                    st.code(
-                        f"access_token: {_data.get('access_token', 'N/A')}\n"
-                        f"session_token: {_data.get('session_token', 'N/A')}\n"
-                        f"device_id: {_data.get('device_id', 'N/A')}",
-                        language="yaml",
-                    )
-                else:
-                    st.caption("无 Token 信息")
-    else:
-        st.info("暂无已注册的账号。执行完成后自动显示。")
-
-    if st.button("刷新", key="ref_acc"):
-        st.rerun()
+with col_right:
+    tab_accounts, tab_history, tab_sync = st.tabs(["账号", "历史", "同步"])
 
 
-# ════════════════════════════════════════
-# Tab: 历史
-# ════════════════════════════════════════
-with tab_history:
-    _history = get_code_history(st.session_state.verified_code)
-    if _history:
-        import pandas as pd
-        _disp = []
+    # Tab: 账号
+    # ════════════════════════════════════════
+    with tab_accounts:
+        _history = get_code_history(st.session_state.verified_code)
+        # 显示所有有邮箱的账号 (注册成功的, 不管支付是否成功)
+        _acct_rows = []
         for r in _history:
-            _disp.append({
-                "状态": {"success": "✅ 成功", "failed": "❌ 失败", "running": "🔄 运行中", "pending": "⏳ 等待"}.get(r["status"], r["status"]),
-                "邮箱": r.get("email") or "-",
-                "计划": r.get("plan_type") or "-",
-                "备注": _sanitize_error(r.get("error_msg") or "") if r["status"] == "failed" else "",
-                "时间": r["created_at"][:19],
-            })
-        st.dataframe(pd.DataFrame(_disp), hide_index=True, use_container_width=True)
-        st.caption(f"共 {len(_history)} 条记录")
-    else:
-        st.info("暂无执行历史")
+            if r.get("result_json"):
+                try:
+                    rd = json.loads(r["result_json"])
+                    if rd.get("email"):
+                        _acct_rows.append({
+                            "exec_id": r["id"],
+                            "email": rd["email"],
+                            "plan_type": r.get("plan_type") or "-",
+                            "status": r["status"],
+                            "created_at": r["created_at"][:19],
+                            "has_token": bool(rd.get("access_token")),
+                            "_data": rd,
+                        })
+                except Exception:
+                    pass
 
-    if st.button("刷新", key="ref_hist"):
-        st.rerun()
+        if _acct_rows:
+            import pandas as pd
+            _disp_rows = []
+            for a in _acct_rows:
+                _disp_rows.append({
+                    "邮箱": a["email"],
+                    "计划": a["plan_type"],
+                    "支付": "✅ 成功" if a["status"] == "success" else "❌ 失败",
+                    "时间": a["created_at"],
+                })
+            st.dataframe(pd.DataFrame(_disp_rows), hide_index=True, use_container_width=True)
+            st.caption(f"共 {len(_acct_rows)} 个账号")
+
+            st.divider()
+            for idx, acct in enumerate(_acct_rows):
+                _data = acct["_data"]
+                with st.expander(f"{acct['email']}  {'✅' if acct['status'] == 'success' else '❌'}", expanded=False):
+                    if _data.get("access_token"):
+                        st.code(
+                            f"access_token: {_data.get('access_token', 'N/A')}\n"
+                            f"session_token: {_data.get('session_token', 'N/A')}\n"
+                            f"device_id: {_data.get('device_id', 'N/A')}",
+                            language="yaml",
+                        )
+                    else:
+                        st.caption("无 Token 信息")
+        else:
+            st.info("暂无已注册的账号。执行完成后自动显示。")
+
+        if st.button("刷新", key="ref_acc"):
+            st.rerun()
+
+
+    # ════════════════════════════════════════
+    # Tab: 历史
+    # ════════════════════════════════════════
+    with tab_history:
+        _history = get_code_history(st.session_state.verified_code)
+        if _history:
+            import pandas as pd
+            _disp = []
+            for r in _history:
+                _disp.append({
+                    "状态": {"success": "✅ 成功", "failed": "❌ 失败", "running": "🔄 运行中", "pending": "⏳ 等待"}.get(r["status"], r["status"]),
+                    "邮箱": r.get("email") or "-",
+                    "计划": r.get("plan_type") or "-",
+                    "备注": _sanitize_error(r.get("error_msg") or "") if r["status"] == "failed" else "",
+                    "时间": r["created_at"][:19],
+                })
+            st.dataframe(pd.DataFrame(_disp), hide_index=True, use_container_width=True)
+            st.caption(f"共 {len(_history)} 条记录")
+        else:
+            st.info("暂无执行历史")
+
+        if st.button("刷新", key="ref_hist"):
+            st.rerun()
+
+
+    # ════════════════════════════════════════
+    # Tab: NewAPI 同步
+    # ════════════════════════════════════════
+    with tab_sync:
+        st.subheader("NewAPI 渠道同步")
+        st.caption("将注册生成的 credentials 自动导入到 NewAPI 平台")
+
+        # ── 配置区域 ──
+        with st.expander("NewAPI 配置", expanded=False):
+            _nc1, _nc2 = st.columns(2)
+            _newapi_base = _nc1.text_input(
+                "API 地址", placeholder="http://your-newapi.com",
+                key="w_newapi_base", on_change=_on_config_change,
+            )
+            _newapi_token = _nc2.text_input(
+                "Admin Token", type="password", placeholder="Bearer Token",
+                key="w_newapi_token", on_change=_on_config_change,
+            )
+            _nc3, _nc4, _nc5 = st.columns(3)
+            _newapi_type = _nc3.text_input(
+                "渠道类型 (type)", value=st.session_state.get("w_newapi_type", "57"),
+                key="w_newapi_type", on_change=_on_config_change,
+                help="57 = OpenAI Codex",
+            )
+            _newapi_group = _nc4.text_input(
+                "分组 (group)", value=st.session_state.get("w_newapi_group", "default,vip,svip"),
+                key="w_newapi_group", on_change=_on_config_change,
+            )
+            _nc5a, _nc5b = _nc5.columns(2)
+            _newapi_priority = _nc5a.text_input(
+                "优先级", value=st.session_state.get("w_newapi_priority", "0"),
+                key="w_newapi_priority", on_change=_on_config_change,
+            )
+            _newapi_weight = _nc5b.text_input(
+                "权重", value=st.session_state.get("w_newapi_weight", "0"),
+                key="w_newapi_weight", on_change=_on_config_change,
+            )
+            _newapi_models = st.text_area(
+                "模型列表 (逗号分隔)",
+                value=st.session_state.get("w_newapi_models",
+                    "gpt-5,gpt-5-codex,gpt-5-codex-mini,gpt-5.1,gpt-5.1-codex,gpt-5.1-codex-max,"
+                    "gpt-5.1-codex-mini,gpt-5.2,gpt-5.2-codex,gpt-5.3-codex"),
+                key="w_newapi_models", on_change=_on_config_change,
+                height=80,
+            )
+
+        # ── 扫描 credentials 文件 ──
+        _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
+        _cred_files = []
+        if os.path.isdir(_cred_dir):
+            _cred_files = sorted(
+                [f for f in os.listdir(_cred_dir) if f.startswith("credentials_") and f.endswith(".json")],
+                reverse=True,
+            )
+
+        if not _cred_files:
+            st.info("暂无 credentials 文件。注册成功后自动生成。")
+        else:
+            # 加载并展示
+            _cred_data_list = []
+            for _cf in _cred_files:
+                _cf_path = os.path.join(_cred_dir, _cf)
+                try:
+                    with open(_cf_path, encoding="utf-8") as _f:
+                        _cd = json.load(_f)
+                    _cd["_filename"] = _cf
+                    _cd["_filepath"] = _cf_path
+                    _cred_data_list.append(_cd)
+                except Exception:
+                    pass
+
+            if _cred_data_list:
+                # ── 导入函数 (成功后回写 synced 标记) ──
+                def _do_newapi_import(cred_list, base_url, admin_token, ch_type, models, group, priority, weight):
+                    """将 credentials 列表导入到 NewAPI，成功后标记 synced_to_newapi"""
+                    import requests as _req
+                    results = []
+                    headers = {
+                        "Authorization": f"Bearer {admin_token}",
+                        "Content-Type": "application/json",
+                        "New-Api-User": "1",
+                    }
+                    base_url = base_url.rstrip("/")
+                    for cd in cred_list:
+                        email = cd.get("email", "unknown")
+                        # 构建 key: 排除内部字段和 synced 标记
+                        key_data = {k: v for k, v in cd.items()
+                                    if not k.startswith("_") and k != "synced_to_newapi"}
+                        key_json = json.dumps(key_data, ensure_ascii=False)
+                        payload = {
+                            "mode": "single",
+                            "channel": {
+                                "type": int(ch_type) if ch_type.isdigit() else 57,
+                                "name": f"codex-{email}",
+                                "key": key_json,
+                                "models": models.strip(),
+                                "group": group.strip(),
+                                "priority": int(priority) if str(priority).lstrip("-").isdigit() else 0,
+                                "weight": int(weight) if str(weight).lstrip("-").isdigit() else 0,
+                            },
+                        }
+                        try:
+                            resp = _req.post(
+                                f"{base_url}/api/channel/",
+                                headers=headers, json=payload, timeout=30,
+                            )
+                            if resp.status_code == 200:
+                                try:
+                                    rj = resp.json()
+                                    if rj.get("success"):
+                                        results.append((email, True, "成功"))
+                                        # 回写 synced 标记到 JSON 文件
+                                        _mark_synced(cd)
+                                    else:
+                                        results.append((email, False, rj.get("message", resp.text[:200])))
+                                except Exception:
+                                    results.append((email, False, f"返回非 JSON: {resp.text[:200]}"))
+                            else:
+                                results.append((email, False, f"HTTP {resp.status_code}: {resp.text[:200]}"))
+                        except Exception as e:
+                            results.append((email, False, f"请求异常: {str(e)[:200]}"))
+                    return results
+
+                def _mark_synced(cd):
+                    """导入成功后在 JSON 文件中标记 synced_to_newapi=true"""
+                    filepath = cd.get("_filepath")
+                    if not filepath:
+                        return
+                    try:
+                        with open(filepath, encoding="utf-8") as f:
+                            data = json.load(f)
+                        data["synced_to_newapi"] = True
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                        cd["synced_to_newapi"] = True  # 同步内存状态
+                    except Exception:
+                        pass
+
+                # ── 列表 (固定高度滚动) ──
+                with st.container(height=680):
+                    _hdr = st.columns([2.5, 1.2, 1.2, 1, 1])
+                    _hdr[0].markdown("**邮箱**")
+                    _hdr[1].markdown("**refresh_token**")
+                    _hdr[2].markdown("**access_token**")
+                    _hdr[3].markdown("**状态**")
+                    _hdr[4].markdown("**操作**")
+
+                    for _idx, _cd in enumerate(_cred_data_list):
+                        _email = _cd.get("email", "unknown")
+                        _has_rt = bool(_cd.get("refresh_token"))
+                        _is_synced = bool(_cd.get("synced_to_newapi"))
+                        _row = st.columns([2.5, 1.2, 1.2, 1, 1])
+                        _row[0].text(_email)
+                        _row[1].markdown("✅" if _has_rt else "❌")
+                        _row[2].markdown("✅" if _cd.get("access_token") else "❌")
+                        _row[3].markdown("✅ 已导入" if _is_synced else "⏳ 待导入")
+                        with _row[4]:
+                            if st.button(
+                                "已导入" if _is_synced else "导入",
+                                key=f"sync_single_{_idx}",
+                                disabled=not _newapi_base or not _newapi_token or not _has_rt or _is_synced,
+                            ):
+                                with st.spinner(f"导入 {_email}..."):
+                                    _sr = _do_newapi_import(
+                                        [_cd], _newapi_base, _newapi_token,
+                                        _newapi_type, _newapi_models, _newapi_group,
+                                        _newapi_priority, _newapi_weight,
+                                    )
+                                if _sr and _sr[0][1]:
+                                    st.success(f"✅ {_email} 导入成功")
+                                    st.rerun()
+                                elif _sr:
+                                    st.error(f"❌ {_email}: {_sr[0][2]}")
+
+                # ── 统计 ──
+                _synced_count = sum(1 for cd in _cred_data_list if cd.get("synced_to_newapi"))
+                st.caption(f"共 {len(_cred_data_list)} 个文件，已导入 {_synced_count} 个")
+
+                # ── 全部导入 (过滤已同步 + 无 refresh_token) ──
+                _syncable = [cd for cd in _cred_data_list
+                             if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
+                _sync_col1, _sync_col2 = st.columns([3, 1])
+                with _sync_col1:
+                    _sync_all_btn = st.button(
+                        f"全部导入 ({len(_syncable)} 个待同步)",
+                        type="primary", use_container_width=True, key="sync_all_btn",
+                        disabled=not _newapi_base or not _newapi_token or not _syncable,
+                    )
+                with _sync_col2:
+                    if st.button("刷新列表", key="sync_refresh"):
+                        st.rerun()
+
+                if not _newapi_base or not _newapi_token:
+                    st.warning("请先配置 API 地址和 Admin Token")
+
+                if _sync_all_btn:
+                    with st.spinner(f"正在导入 {len(_syncable)} 个账号..."):
+                        _import_results = _do_newapi_import(
+                            _syncable, _newapi_base, _newapi_token,
+                            _newapi_type, _newapi_models, _newapi_group,
+                            _newapi_priority, _newapi_weight,
+                        )
+                    _ok = sum(1 for _, s, _ in _import_results if s)
+                    _fail = sum(1 for _, s, _ in _import_results if not s)
+                    if _ok:
+                        st.success(f"✅ 成功导入 {_ok} 个账号")
+                    if _fail:
+                        st.error(f"❌ 失败 {_fail} 个账号")
+                    for _email, _succ, _msg in _import_results:
+                        if _succ:
+                            st.write(f"✅ {_email}")
+                        else:
+                            st.write(f"❌ {_email}: {_msg}")
+                    if _ok:
+                        st.rerun()

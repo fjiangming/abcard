@@ -62,6 +62,10 @@ class Config:
     team_plan: TeamPlanConfig = field(default_factory=TeamPlanConfig)
     captcha: CaptchaConfig = field(default_factory=CaptchaConfig)
     proxy: Optional[str] = None
+    # 注册模式: "otp" (无密码) 或 "password" (密码注册)
+    register_mode: str = "otp"
+    # 默认注册密码 (密码模式下使用, 为空则自动生成)
+    default_password: Optional[str] = None
     # 已有凭证（可选，跳过注册直接支付时使用）
     session_token: Optional[str] = None
     access_token: Optional[str] = None
@@ -86,6 +90,8 @@ class Config:
         if "captcha" in data:
             cfg.captcha = CaptchaConfig(**data["captcha"])
         cfg.proxy = data.get("proxy")
+        cfg.register_mode = data.get("register_mode", "otp")
+        cfg.default_password = data.get("default_password")
         cfg.session_token = data.get("session_token")
         cfg.access_token = data.get("access_token")
         cfg.device_id = data.get("device_id")
@@ -100,6 +106,8 @@ class Config:
             "team_plan": self.team_plan.__dict__,
             "captcha": self.captcha.__dict__,
             "proxy": self.proxy,
+            "register_mode": self.register_mode,
+            "default_password": self.default_password,
             "session_token": self.session_token,
             "access_token": self.access_token,
             "device_id": self.device_id,
