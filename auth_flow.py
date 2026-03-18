@@ -1351,23 +1351,33 @@ class AuthFlow:
         if not self.result.is_valid():
             raise RuntimeError("注册完成但未获取有效凭证")
 
-        # 密码注册独有: Codex OAuth 获取 refresh_token
+        # 密码注册独有: Codex OAuth 获取 refresh_token (带重试)
         if not self.result.refresh_token:
-            logger.info("尝试通过 Codex OAuth 获取 refresh_token...")
-            try:
-                tokens = self.perform_codex_oauth(email, password, mail_provider)
-                if tokens:
-                    if tokens.get("refresh_token"):
+            _max_oauth_retries = 3
+            for _oauth_attempt in range(1, _max_oauth_retries + 1):
+                logger.info(f"尝试通过 Codex OAuth 获取 refresh_token... (第 {_oauth_attempt}/{_max_oauth_retries} 次)")
+                try:
+                    tokens = self.perform_codex_oauth(email, password, mail_provider)
+                    if tokens and tokens.get("refresh_token"):
                         self.result.refresh_token = tokens["refresh_token"]
-                        logger.info("refresh_token 获取成功!")
-                    if tokens.get("access_token"):
-                        self.result.access_token = tokens["access_token"]
-                    if tokens.get("id_token"):
-                        self.result.id_token = tokens["id_token"]
-                else:
-                    logger.warning("Codex OAuth 未返回 token")
-            except Exception as e:
-                logger.warning(f"Codex OAuth 失败: {e}")
+                        if tokens.get("access_token"):
+                            self.result.access_token = tokens["access_token"]
+                        if tokens.get("id_token"):
+                            self.result.id_token = tokens["id_token"]
+                        logger.info(f"refresh_token 获取成功! (第 {_oauth_attempt} 次尝试)")
+                        break
+                    else:
+                        logger.warning(f"Codex OAuth 第 {_oauth_attempt} 次未返回 refresh_token")
+                except Exception as e:
+                    logger.warning(f"Codex OAuth 第 {_oauth_attempt} 次失败: {e}")
+
+                if _oauth_attempt < _max_oauth_retries:
+                    _retry_delay = _oauth_attempt * 2  # 2s, 4s
+                    logger.info(f"等待 {_retry_delay}s 后重试...")
+                    _time.sleep(_retry_delay)
+
+            if not self.result.refresh_token:
+                logger.warning(f"Codex OAuth 重试 {_max_oauth_retries} 次后仍未获取到 refresh_token")
 
         logger.info("密码注册流程完成!")
         return self.result

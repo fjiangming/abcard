@@ -147,6 +147,26 @@ python3 admin_cli.py info XXXX-XXXX-XXXX
 python3 admin_cli.py history XXXX-XXXX-XXXX
 ```
 
+### 如何获取兑换码
+
+兑换码由 **管理员** 通过上述 `admin_cli.py generate` 命令生成后分发给用户。每个兑换码在生成时指定可用次数（`--uses`），用完即失效。
+
+### 修改已有兑换码的可用次数
+
+如需调整已有兑换码的可用次数，直接修改数据库：
+
+```bash
+python3 -c "
+from database import get_db, init_db
+init_db()
+with get_db() as conn:
+    conn.execute('UPDATE codes SET total_uses = 100 WHERE code = ?', ('你的兑换码',))
+    print('已更新')
+"
+```
+
+将 `100` 替换为目标次数，`你的兑换码` 替换为实际兑换码。`total_uses` 为总可用次数，`used_count` 为已使用次数。
+
 ### 额度扣减规则
 
 | 模式 | 执行结果 | 净消耗 |

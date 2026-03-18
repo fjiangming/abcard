@@ -23,6 +23,7 @@ from payment_flow import PaymentFlow
 from logger import ResultStore
 from database import init_db
 from code_manager import validate_code, reserve_use, complete_use, update_execution, get_code_history, get_code_info, save_code_config, load_code_config
+from batch_register import BatchRegisterManager
 
 init_db()
 
@@ -106,31 +107,26 @@ def _apply_config_data(data: dict, force: bool = False):
 
 def _load_config_defaults():
     """启动时加载配置到 session_state 默认值。
-    优先级: 兑换码数据库配置 > config.json 全局配置"""
+    优先级: 兑换码数据库配置 > config.json 全局配置 (两者合并，不互斥)"""
     if st.session_state.get("_config_loaded"):
         return
 
-    # 1) 尝试从兑换码数据库加载配置
+    # 1) 尝试从兑换码数据库加载配置 (force=True 覆盖)
     code = st.session_state.get("verified_code", "")
     if _ENABLE_CODE_SYSTEM and code and code != "__disabled__":
         code_cfg = load_code_config(code)
         if code_cfg:
             _apply_config_data(code_cfg, force=True)
-            st.session_state["_config_loaded"] = True
-            return
 
-    # 2) 回退到 config.json
+    # 2) 用 config.json 补充未设置的字段 (setdefault, 不覆盖已有值)
     try:
-        if not os.path.isfile(_CONFIG_PATH):
-            st.session_state["_config_loaded"] = True
-            return
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
-            data = json.load(f)
+        if os.path.isfile(_CONFIG_PATH):
+            with open(_CONFIG_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            _apply_config_data(data)  # force=False, 仅补充缺失值
     except Exception:
-        st.session_state["_config_loaded"] = True
-        return
+        pass
 
-    _apply_config_data(data)
     st.session_state["_config_loaded"] = True
 
 
@@ -978,8 +974,10 @@ def _run_flow_thread(rd, cs):
             else:
                 auth_result = af.run_register(mp)
             rd.update(auth_result.to_dict())  # 完整写入所有字段 (含 refresh_token 等)
-            store.save_credentials(auth_result.to_dict())
-            store.append_credentials_csv(auth_result.to_dict())
+            _cred_dict = auth_result.to_dict()
+            _cred_dict["code"] = st.session_state.get("verified_code", "")  # 记录兑换码来源
+            store.save_credentials(_cred_dict)
+            store.append_credentials_csv(_cred_dict)
         elif cs["use_existing_creds"] and cs["do_checkout"]:
             if not cs["cred_access_token"]:
                 raise RuntimeError("必须提供 access_token")
@@ -1219,6 +1217,21 @@ with col_left:
         is_password_mode = False
         default_password = ""
 
+    # ── 仅注册模式: 批量注册设置 ──
+    batch_total = 1
+    batch_concurrency = 3
+    auto_sync_newapi = False
+    if flow_mode == "仅注册":
+        with st.expander("批量注册设置", expanded=True):
+            _bc1, _bc2 = st.columns(2)
+            batch_total = _bc1.number_input("注册数量", min_value=1, max_value=100, value=1, key="w_batch_total",
+                                            help="设为 1 则为单次注册，大于 1 启用批量并发注册")
+            batch_concurrency = _bc2.number_input("并发数", min_value=1, max_value=10, value=3, key="w_batch_concurrency",
+                                                  help="同时执行的注册任务数，建议 2-5")
+            auto_sync_newapi = st.checkbox("注册后自动同步", value=st.session_state.get("w_auto_sync_newapi", False),
+                                           key="w_auto_sync_newapi",
+                                           help="注册成功后自动将凭证同步到 NewAPI 渠道（需先在右侧「同步」tab 配置 NewAPI 参数）")
+
 
     # 默认值 (非开发者模式下不显示这些设置)
     use_browser_mode = True
@@ -1437,7 +1450,10 @@ if do_payment: steps_list.append("支付")
 with col_mid:
     # 额度提示
     if flow_mode == "仅注册":
-        st.info("🆕 仅注册模式: 消耗 **1** 次额度")
+        if batch_total > 1:
+            st.info(f"🆕 批量注册模式: **{batch_total}** 条, 并发 **{batch_concurrency}**")
+        else:
+            st.info("🆕 仅注册模式: 消耗 **1** 次额度")
     elif flow_mode == "仅绑卡":
         st.info("💳 仅绑卡模式: 消耗 **1** 次额度")
     else:
@@ -1478,8 +1494,9 @@ with col_mid:
                 st.error(f"兑换码不可用: {_vm}")
                 st.stop()
 
-        # 预留使用额度: 注册+绑卡=2, 其他=1
-        if _ENABLE_CODE_SYSTEM:
+        # 预留使用额度 (仅单次模式需要; 批量模式由 BatchRegisterManager 自行写入记录)
+        _is_batch_mode = (flow_mode == "仅注册" and batch_total > 1)
+        if _ENABLE_CODE_SYSTEM and not _is_batch_mode:
             _reserve_amount = 2 if (flow_mode == "注册 + 绑卡") else 1
             _exec_id = reserve_use(st.session_state.verified_code, plan_type=plan_type, amount=_reserve_amount)
             if _exec_id is None:
@@ -1525,39 +1542,161 @@ with col_mid:
             "register_mode": "password" if is_password_mode else "otp",
             "default_password": default_password,
         }
-        st.session_state._flow_result = {"success": False, "error": "", "email": "", "steps": {}}
         st.session_state.running = True
         st.session_state.log_buffer = []
         st.session_state.result = None
         clear_captured_logs()
         init_logging()
-        _t = threading.Thread(
-            target=_run_flow_thread,
-            args=(st.session_state._flow_result, st.session_state._flow_config),
-            daemon=True,
-        )
-        _t.start()
+
+        # ── 批量注册分支 ──
+        if _is_batch_mode:
+            # 批量模式: 使用 BatchRegisterManager
+            st.session_state._batch_mode = True
+            # 构建自动同步配置 (仅在勾选了「注册后自动同步」时传入)
+            _auto_sync_cfg = None
+            if auto_sync_newapi:
+                _auto_sync_cfg = {
+                    "base_url": st.session_state.get("w_newapi_base", ""),
+                    "admin_token": st.session_state.get("w_newapi_token", ""),
+                    "channel_type": st.session_state.get("w_newapi_type", "57"),
+                    "models": st.session_state.get("w_newapi_models", ""),
+                    "group": st.session_state.get("w_newapi_group", "default,vip,svip"),
+                    "priority": st.session_state.get("w_newapi_priority", "0"),
+                    "weight": st.session_state.get("w_newapi_weight", "0"),
+                }
+            _batch_mgr = BatchRegisterManager(
+                config_snapshot=st.session_state._flow_config,
+                total=batch_total,
+                concurrency=batch_concurrency,
+                verified_code=st.session_state.get("verified_code", "__disabled__"),
+                auto_sync_config=_auto_sync_cfg,
+            )
+            st.session_state._batch_manager = _batch_mgr
+            _batch_mgr.start()
+        else:
+            # 单次模式: 沿用现有逻辑
+            st.session_state._batch_mode = False
+            st.session_state._flow_result = {"success": False, "error": "", "email": "", "steps": {}}
+            _t = threading.Thread(
+                target=_run_flow_thread,
+                args=(st.session_state._flow_result, st.session_state._flow_config),
+                daemon=True,
+            )
+            _t.start()
         st.rerun()
 
     # ── 点击终止 ──
     if stop_btn and st.session_state.running:
-        import subprocess as _sp
-        try:
-            _sp.run(["pkill", "-f", "remote-debugging-port"], capture_output=True)
-        except Exception:
-            pass
-        st.session_state.running = False
-        st.session_state.result = {"success": False, "error": "用户手动终止", "email": ""}
+        if st.session_state.get("_batch_mode"):
+            # 批量模式: 取消后续任务
+            _batch_mgr = st.session_state.get("_batch_manager")
+            if _batch_mgr:
+                _batch_mgr.cancel()
+            st.session_state.running = False
+            st.warning("已发送取消信号，等待运行中的任务完成...")
+        else:
+            import subprocess as _sp
+            try:
+                _sp.run(["pkill", "-f", "remote-debugging-port"], capture_output=True)
+            except Exception:
+                pass
+            st.session_state.running = False
+            st.session_state.result = {"success": False, "error": "用户手动终止", "email": ""}
         # 终止不扣额度
         _eid = st.session_state.get("_execution_id")
         if _eid:
             complete_use(_eid, success=False, error_msg="用户手动终止")
             st.session_state._execution_id = None
-        st.warning("已终止执行")
         st.rerun()
 
-    # ── 运行中: 显示进度 + 实时日志 ──
-    if st.session_state.running:
+    # ══════════════════════════════════════
+    # 运行状态显示 (区分单次 vs 批量)
+    # ══════════════════════════════════════
+    _is_batch = st.session_state.get("_batch_mode", False)
+
+    # ── 批量运行中: 任务状态面板 ──
+    if st.session_state.running and _is_batch:
+        _batch_mgr = st.session_state.get("_batch_manager")
+        if _batch_mgr:
+            _completed = _batch_mgr.completed_count
+            _pct = int(_completed / _batch_mgr.total * 100) if _batch_mgr.total > 0 else 0
+            st.progress(_pct / 100.0)
+            st.markdown(
+                f'<div style="text-align:center;font-size:22px;font-weight:bold;margin:-10px 0 10px;color:#2d3436">'
+                f'批量注册: {_completed}/{_batch_mgr.total} 完成 ({_batch_mgr.running_count} 并发中) — {_pct}%</div>',
+                unsafe_allow_html=True,
+            )
+
+            # 任务列表
+            _status_icons = {"pending": "⏳", "running": "🔄", "success": "✅", "failed": "❌", "cancelled": "🚫"}
+            _task_lines = []
+            for _r in _batch_mgr.results:
+                _icon = _status_icons.get(_r.status, "❓")
+                if _r.status == "success":
+                    _sync_tag = ""
+                    if _r.sync_status == "success":
+                        _sync_tag = "  🔗已同步"
+                    elif _r.sync_status == "failed":
+                        _sync_tag = f"  ⚠️同步失败: {_r.sync_error[:40]}"
+                    _task_lines.append(f"{_icon} #{_r.task_id + 1}  {_r.email}  ({_r.duration:.1f}s){_sync_tag}")
+                elif _r.status == "failed":
+                    _task_lines.append(f"{_icon} #{_r.task_id + 1}  失败: {_r.error[:60]}  ({_r.duration:.1f}s)")
+                elif _r.status == "running":
+                    _task_lines.append(f"{_icon} #{_r.task_id + 1}  注册中...")
+                elif _r.status == "cancelled":
+                    _task_lines.append(f"{_icon} #{_r.task_id + 1}  已取消")
+                else:
+                    _task_lines.append(f"{_icon} #{_r.task_id + 1}  排队中")
+
+            import streamlit.components.v1 as _components
+            import html as _html_mod
+            _task_html = _html_mod.escape("\n".join(_task_lines))
+            _components.html(f"""
+                <style>
+                    body {{ margin: 0; padding: 0; }}
+                    #task-box {{
+                        height: 400px; overflow-y: auto;
+                        background: #f8f9fb; color: #31333f;
+                        font-family: "Source Code Pro", "Courier New", monospace;
+                        font-size: 14px; line-height: 1.8; padding: 1rem;
+                        border-radius: 0.5rem; border: 1px solid rgba(49,51,63,0.2);
+                        white-space: pre-wrap;
+                    }}
+                </style>
+                <div id="task-box"><pre style="margin:0">{_task_html}</pre></div>
+                <script>
+                    var box = document.getElementById('task-box');
+                    box.scrollTop = box.scrollHeight;
+                </script>
+            """, height=430)
+
+            # 底部统计
+            _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+            _sc1.metric("成功", _batch_mgr.success_count)
+            _sc2.metric("失败", _batch_mgr.failed_count)
+            _sc3.metric("运行中", _batch_mgr.running_count)
+            _sc4.metric("待执行", _batch_mgr.total - _completed)
+
+            # 检查是否完成
+            if _batch_mgr.is_done:
+                st.session_state.running = False
+                # 构建批量结果 summary 存入 session_state.result
+                st.session_state.result = {
+                    "_batch": True,
+                    "total": _batch_mgr.total,
+                    "success_count": _batch_mgr.success_count,
+                    "failed_count": _batch_mgr.failed_count,
+                    "failed_details": [{"task_id": r.task_id + 1, "error": r.error, "duration": r.duration} for r in _batch_mgr.failed_details],
+                    "success_emails": [r.email for r in _batch_mgr.results if r.status == "success"],
+                }
+                st.rerun()
+            else:
+                import time as _time
+                _time.sleep(1.5)
+                st.rerun()
+
+    # ── 单次运行中: 原有进度+日志 ──
+    elif st.session_state.running and not _is_batch:
         pct = _calc_progress_pct()
         st.progress(pct / 100.0)
         st.markdown(
@@ -1565,7 +1704,7 @@ with col_mid:
             unsafe_allow_html=True,
         )
 
-        # ── 实时日志: 必须在 st.rerun() 之前渲染，否则不会被执行到 ──
+        # ── 实时日志 ──
         st.markdown('<div style="margin-top: 10px; margin-bottom: 5px; font-weight: bold; font-size: 16px;">执行日志</div>', unsafe_allow_html=True)
         pull_captured_logs()
         import streamlit.components.v1 as _components
@@ -1617,7 +1756,7 @@ with col_mid:
                     result_json=json.dumps(rd, ensure_ascii=False, default=str),
                 )
                 st.session_state._execution_id = None
-            # ── 同步保存配置到兑换码数据库 (与账号数据持久化时机一致) ──
+            # ── 同步保存配置到兑换码数据库 ──
             _cur_code = st.session_state.get("verified_code", "")
             if _ENABLE_CODE_SYSTEM and _cur_code and _cur_code != "__disabled__":
                 try:
@@ -1630,25 +1769,45 @@ with col_mid:
             _time.sleep(1)
             st.rerun()
 
-    # ── 显示结果 ──
+    # ══════════════════════════════════════
+    # 结果展示 (非运行状态)
+    # ══════════════════════════════════════
     if st.session_state.result and not st.session_state.running:
         r = st.session_state.result
-        if r.get("success"):
-            st.progress(1.0)
-            st.success(f"全部完成 — {r.get('email', '')}")
-        elif r.get("error"):
-            st.error(_sanitize_error(r.get('error', '')))
 
-        if dev_mode:
-            st.divider()
-            cols = st.columns(4)
-            cols[0].metric("邮箱", r.get("email") or "-")
-            cols[1].metric("Checkout", (r.get("checkout_session_id", "")[:20] + "...") if r.get("checkout_session_id") else "-")
-            cols[2].metric("Confirm", r.get("confirm_status") or "-")
-            cols[3].metric("状态", "成功" if r.get("success") else "失败")
-            if r.get("confirm_response"):
-                with st.expander("Stripe 原始响应", expanded=False):
-                    st.json(r["confirm_response"])
+        # ── 批量结果汇总 ──
+        if r.get("_batch"):
+            _total = r.get("total", 0)
+            _succ = r.get("success_count", 0)
+            _fail = r.get("failed_count", 0)
+
+            if _fail == 0:
+                st.success(f"🎉 批量注册全部成功! 总共 {_total} 条，成功 {_succ} 条")
+            elif _succ == 0:
+                st.error(f"批量注册全部失败 总共 {_total} 条，失败 {_fail} 条")
+            else:
+                st.warning(f"批量注册完成 总共 {_total} 条，成功 {_succ} 条，失败 {_fail} 条")
+
+            st.progress(1.0)
+
+        # ── 单次结果 ──
+        else:
+            if r.get("success"):
+                st.progress(1.0)
+                st.success(f"全部完成 — {r.get('email', '')}")
+            elif r.get("error"):
+                st.error(_sanitize_error(r.get('error', '')))
+
+            if dev_mode:
+                st.divider()
+                cols = st.columns(4)
+                cols[0].metric("邮箱", r.get("email") or "-")
+                cols[1].metric("Checkout", (r.get("checkout_session_id", "")[:20] + "...") if r.get("checkout_session_id") else "-")
+                cols[2].metric("Confirm", r.get("confirm_status") or "-")
+                cols[3].metric("状态", "成功" if r.get("success") else "失败")
+                if r.get("confirm_response"):
+                    with st.expander("Stripe 原始响应", expanded=False):
+                        st.json(r["confirm_response"])
 
     # ── 非运行中的日志区 (完成后 / 空闲时显示) ──
     if not st.session_state.running:
@@ -1689,64 +1848,7 @@ with col_mid:
             st.info("等待执行...")
 
 with col_right:
-    tab_accounts, tab_history, tab_sync = st.tabs(["账号", "历史", "同步"])
-
-
-    # Tab: 账号
-    # ════════════════════════════════════════
-    with tab_accounts:
-        _history = get_code_history(st.session_state.verified_code)
-        # 显示所有有邮箱的账号 (注册成功的, 不管支付是否成功)
-        _acct_rows = []
-        for r in _history:
-            if r.get("result_json"):
-                try:
-                    rd = json.loads(r["result_json"])
-                    if rd.get("email"):
-                        _acct_rows.append({
-                            "exec_id": r["id"],
-                            "email": rd["email"],
-                            "plan_type": r.get("plan_type") or "-",
-                            "status": r["status"],
-                            "created_at": r["created_at"][:19],
-                            "has_token": bool(rd.get("access_token")),
-                            "_data": rd,
-                        })
-                except Exception:
-                    pass
-
-        if _acct_rows:
-            import pandas as pd
-            _disp_rows = []
-            for a in _acct_rows:
-                _disp_rows.append({
-                    "邮箱": a["email"],
-                    "计划": a["plan_type"],
-                    "支付": "✅ 成功" if a["status"] == "success" else "❌ 失败",
-                    "时间": a["created_at"],
-                })
-            st.dataframe(pd.DataFrame(_disp_rows), hide_index=True, use_container_width=True)
-            st.caption(f"共 {len(_acct_rows)} 个账号")
-
-            st.divider()
-            for idx, acct in enumerate(_acct_rows):
-                _data = acct["_data"]
-                with st.expander(f"{acct['email']}  {'✅' if acct['status'] == 'success' else '❌'}", expanded=False):
-                    if _data.get("access_token"):
-                        st.code(
-                            f"access_token: {_data.get('access_token', 'N/A')}\n"
-                            f"session_token: {_data.get('session_token', 'N/A')}\n"
-                            f"device_id: {_data.get('device_id', 'N/A')}",
-                            language="yaml",
-                        )
-                    else:
-                        st.caption("无 Token 信息")
-        else:
-            st.info("暂无已注册的账号。执行完成后自动显示。")
-
-        if st.button("刷新", key="ref_acc"):
-            st.rerun()
-
+    tab_history, tab_sync = st.tabs(["历史", "同步"])
 
     # ════════════════════════════════════════
     # Tab: 历史
@@ -1754,23 +1856,221 @@ with col_right:
     with tab_history:
         _history = get_code_history(st.session_state.verified_code)
         if _history:
-            import pandas as pd
-            _disp = []
-            for r in _history:
-                _disp.append({
-                    "状态": {"success": "✅ 成功", "failed": "❌ 失败", "running": "🔄 运行中", "pending": "⏳ 等待"}.get(r["status"], r["status"]),
-                    "邮箱": r.get("email") or "-",
-                    "计划": r.get("plan_type") or "-",
-                    "备注": _sanitize_error(r.get("error_msg") or "") if r["status"] == "failed" else "",
-                    "时间": r["created_at"][:19],
-                })
-            st.dataframe(pd.DataFrame(_disp), hide_index=True, use_container_width=True)
-            st.caption(f"共 {len(_history)} 条记录")
+            import html as _html_mod
+            import streamlit.components.v1 as _components
+            import json
+
+            if "history_page" not in st.session_state:
+                st.session_state.history_page = 1
+            if "history_page_size" not in st.session_state:
+                st.session_state.history_page_size = 50
+                
+            PAGE_SIZE = st.session_state.history_page_size
+            total_records = len(_history)
+            total_pages = max(1, (total_records + PAGE_SIZE - 1) // PAGE_SIZE)
+
+            if st.session_state.history_page > total_pages:
+                st.session_state.history_page = total_pages
+            elif st.session_state.history_page < 1:
+                st.session_state.history_page = 1
+                
+            start_idx = (st.session_state.history_page - 1) * PAGE_SIZE
+            end_idx = start_idx + PAGE_SIZE
+            page_data = _history[start_idx:end_idx]
+
+            html_rows = []
+            for i, r in enumerate(page_data):
+                idx = start_idx + i + 1
+                status_val = r["status"]
+                if status_val == "success":
+                    status_html = '<span class="status-badge status-success">✅ 成功</span>'
+                elif status_val == "failed":
+                    status_html = '<span class="status-badge status-failed">❌ 失败</span>'
+                elif status_val == "running":
+                    status_html = '<span class="status-badge" style="background:#e8f0fe; color:#1a73e8;">🔄 运行中</span>'
+                else:
+                    status_html = '<span class="status-badge" style="background:#f1f3f4; color:#5f6368;">⏳ 等待</span>'
+
+                email = _html_mod.escape(r.get("email") or "-")
+                plan = _html_mod.escape(r.get("plan_type") or "-")
+                time_str = _html_mod.escape(r["created_at"][:19])
+                
+                remark = r.get("error_msg") or ""
+                if status_val == "failed" and remark:
+                    remark = _sanitize_error(remark)
+                else:
+                    remark = "-"
+                remark_html = _html_mod.escape(remark)
+
+                content = ""
+                if r.get("result_json"):
+                    try:
+                        rd = json.loads(r["result_json"])
+                        if rd.get("access_token") or rd.get("session_token"):
+                            content = f"access_token: {rd.get('access_token', 'N/A')}\n"
+                            content += f"session_token: {rd.get('session_token', 'N/A')}\n"
+                            if rd.get("refresh_token"):
+                                content += f"refresh_token: {rd.get('refresh_token', 'N/A')}\n"
+                            content += f"device_id: {rd.get('device_id', 'N/A')}"
+                        else:
+                            content = json.dumps(rd, ensure_ascii=False, indent=2)
+                    except Exception:
+                        content = "解析结果 JSON 失败"
+                elif status_val == "failed" and r.get("error_msg"):
+                    content = f"错误详情: {r.get('error_msg')}"
+                else:
+                    content = "无详细信息"
+                    
+                content = _html_mod.escape(content)
+                
+                row_html = f"""
+                <details class="row">
+                    <summary>
+                        <div class="chevron">▶</div>
+                        <div class="col-index">{idx}</div>
+                        <div class="col-status">{status_html}</div>
+                        <div class="col-email">{email}</div>
+                        <div class="col-plan">{plan}</div>
+                        <div class="col-remark" title="{remark_html}">{remark_html}</div>
+                        <div class="col-time">{time_str}</div>
+                    </summary>
+                    <div class="details-content">{content}</div>
+                </details>
+                """
+                html_rows.append(row_html)
+                
+            full_html = f"""
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background-color: transparent; }}
+                .container {{
+                    height: calc(100vh - 10px); 
+                    box-sizing: border-box;
+                    overflow-y: auto;
+                    border-radius: 8px;
+                    border: 1px solid #e6e6e6;
+                    background-color: #ffffff;
+                }}
+                .header {{
+                    display: flex;
+                    padding: 12px 16px;
+                    background-color: #f9f9f9;
+                    font-weight: 600;
+                    font-size: 14px;
+                    color: #31333f;
+                    border-bottom: 1px solid #e6e6e6;
+                    position: sticky;
+                    top: 0;
+                    z-index: 10;
+                }}
+                .col-index {{ width: 40px; flex-shrink: 0; margin-right: 8px; font-variant-numeric: tabular-nums; color: #888; text-align: center; }}
+                .col-status {{ width: 90px; flex-shrink: 0; margin-right: 8px; }}
+                .col-email {{ flex: 2; min-width: 0; word-break: break-all; margin-right: 8px; }}
+                .col-plan {{ width: 80px; flex-shrink: 0; margin-right: 8px; }}
+                .col-remark {{ flex: 2; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 8px; color: #666; font-size: 13px; }}
+                .col-time {{ width: 150px; flex-shrink: 0; text-align: right; }}
+                .row {{
+                    border-bottom: 1px solid #f0f0f0;
+                }}
+                .row:last-child {{
+                    border-bottom: none;
+                }}
+                summary {{
+                    display: flex;
+                    padding: 12px 16px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    color: #31333f;
+                    transition: background-color 0.2s;
+                    align-items: center;
+                }}
+                summary:hover {{
+                    background-color: #f8f9fb;
+                }}
+                summary::-webkit-details-marker {{
+                    display: none;
+                }}
+                .details-content {{
+                    padding: 16px;
+                    background-color: #fafafa;
+                    font-family: "Source Code Pro", "Courier New", monospace;
+                    font-size: 13px;
+                    color: #4a4a4a;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                    border-top: 1px solid #f0f0f0;
+                    line-height: 1.5;
+                }}
+                .chevron {{
+                    margin-right: 12px;
+                    transition: transform 0.2s ease-in-out;
+                    color: #888;
+                    font-size: 12px;
+                }}
+                details[open] .chevron {{
+                    transform: rotate(90deg);
+                }}
+                .status-badge {{
+                    display: inline-block;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-size: 12px;
+                    white-space: nowrap;
+                }}
+                .status-success {{ background: #e6f4ea; color: #137333; }}
+                .status-failed {{ background: #fce8e6; color: #c5221f; }}
+                
+                /* Custom Scrollbar */
+                ::-webkit-scrollbar {{ width: 8px; height: 8px; }}
+                ::-webkit-scrollbar-track {{ background: transparent; }}
+                ::-webkit-scrollbar-thumb {{ background: #c1c1c1; border-radius: 4px; }}
+                ::-webkit-scrollbar-thumb:hover {{ background: #a8a8a8; }}
+            </style>
+            <div class="container">
+                <div class="header">
+                    <div style="width: 24px;"></div>
+                    <div class="col-index">#</div>
+                    <div class="col-status">状态</div>
+                    <div class="col-email">邮箱</div>
+                    <div class="col-plan">计划</div>
+                    <div class="col-remark">备注</div>
+                    <div class="col-time">时间</div>
+                </div>
+                {''.join(html_rows)}
+            </div>
+            """
+            
+            _components.html(full_html, height=800, scrolling=False)
+            
+            st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+            
+            def _on_hist_page_size_change():
+                st.session_state.history_page = 1
+                
+            pcols = st.columns([1, 1, 3, 1, 1, 1])
+            if pcols[0].button("首页", disabled=(st.session_state.history_page == 1), use_container_width=True, key="p_first"):
+                st.session_state.history_page = 1
+                st.rerun()
+            if pcols[1].button("上一页", disabled=(st.session_state.history_page == 1), use_container_width=True, key="p_prev"):
+                st.session_state.history_page -= 1
+                st.rerun()
+            pcols[2].markdown(f"<div style='text-align: center; padding-top: 8px; font-size: 14px; color: #666;'>第 {st.session_state.history_page} / {total_pages} 页 （共 {total_records} 条）</div>", unsafe_allow_html=True)
+            if pcols[3].button("下一页", disabled=(st.session_state.history_page == total_pages), use_container_width=True, key="p_next"):
+                st.session_state.history_page += 1
+                st.rerun()
+            if pcols[4].button("尾页", disabled=(st.session_state.history_page == total_pages), use_container_width=True, key="p_last"):
+                st.session_state.history_page = total_pages
+                st.rerun()
+                
+            pcols[5].selectbox(
+                "每页显示", 
+                options=[50, 100, 200, 500, 1000], 
+                key="history_page_size", 
+                on_change=_on_hist_page_size_change,
+                label_visibility="collapsed"
+            )
+
         else:
             st.info("暂无执行历史")
-
-        if st.button("刷新", key="ref_hist"):
-            st.rerun()
 
 
     # ════════════════════════════════════════
@@ -1785,10 +2085,12 @@ with col_right:
             _nc1, _nc2 = st.columns(2)
             _newapi_base = _nc1.text_input(
                 "API 地址", placeholder="http://your-newapi.com",
+                value=st.session_state.get("w_newapi_base", ""),
                 key="w_newapi_base", on_change=_on_config_change,
             )
             _newapi_token = _nc2.text_input(
                 "Admin Token", type="password", placeholder="Bearer Token",
+                value=st.session_state.get("w_newapi_token", ""),
                 key="w_newapi_token", on_change=_on_config_change,
             )
             _nc3, _nc4, _nc5 = st.columns(3)
@@ -1829,6 +2131,7 @@ with col_right:
                     try:
                         _rd = json.loads(_h["result_json"])
                         if _rd.get("email") and (_rd.get("access_token") or _rd.get("refresh_token")):
+                            _rd["_exec_id"] = _h["id"]  # 用于回写 DB
                             _cred_data_list.append(_rd)
                     except Exception:
                         pass
@@ -1910,39 +2213,52 @@ with col_right:
                 return results
 
             def _mark_synced(cd):
-                """导入成功后在 JSON 文件中标记 synced_to_newapi=true"""
+                """导入成功后标记 synced_to_newapi=true (DB + JSON 文件双写)"""
+                cd["synced_to_newapi"] = True  # 同步内存状态
+
+                # 回写到 DB result_json
+                _eid = cd.get("_exec_id")
+                if _eid:
+                    try:
+                        _rj = {k: v for k, v in cd.items() if not k.startswith("_")}
+                        _rj["synced_to_newapi"] = True
+                        update_execution(_eid, result_json=json.dumps(_rj, ensure_ascii=False, default=str))
+                    except Exception:
+                        pass
+
+                # 回写到 JSON 文件 (如果有 _filepath)
                 filepath = cd.get("_filepath")
-                if not filepath:
-                    return
-                try:
-                    with open(filepath, encoding="utf-8") as f:
-                        data = json.load(f)
-                    data["synced_to_newapi"] = True
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
-                    cd["synced_to_newapi"] = True  # 同步内存状态
-                except Exception:
-                    pass
+                if filepath:
+                    try:
+                        with open(filepath, encoding="utf-8") as f:
+                            data = json.load(f)
+                        data["synced_to_newapi"] = True
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
 
             # ── 列表 (固定高度滚动) ──
             with st.container(height=680):
-                _hdr = st.columns([2.5, 1.2, 1.2, 1, 1])
-                _hdr[0].markdown("**邮箱**")
-                _hdr[1].markdown("**refresh_token**")
-                _hdr[2].markdown("**access_token**")
-                _hdr[3].markdown("**状态**")
-                _hdr[4].markdown("**操作**")
+                _hdr = st.columns([0.6, 2.5, 1.2, 1.2, 1, 1])
+                _hdr[0].markdown("**序号**")
+                _hdr[1].markdown("**邮箱**")
+                _hdr[2].markdown("**refresh_token**")
+                _hdr[3].markdown("**access_token**")
+                _hdr[4].markdown("**状态**")
+                _hdr[5].markdown("**操作**")
 
                 for _idx, _cd in enumerate(_cred_data_list):
                     _email = _cd.get("email", "unknown")
                     _has_rt = bool(_cd.get("refresh_token"))
                     _is_synced = bool(_cd.get("synced_to_newapi"))
-                    _row = st.columns([2.5, 1.2, 1.2, 1, 1])
-                    _row[0].text(_email)
-                    _row[1].markdown("✅" if _has_rt else "❌")
-                    _row[2].markdown("✅" if _cd.get("access_token") else "❌")
-                    _row[3].markdown("✅ 已导入" if _is_synced else "⏳ 待导入")
-                    with _row[4]:
+                    _row = st.columns([0.6, 2.5, 1.2, 1.2, 1, 1])
+                    _row[0].text(str(_idx + 1))
+                    _row[1].text(_email)
+                    _row[2].markdown("✅" if _has_rt else "❌")
+                    _row[3].markdown("✅" if _cd.get("access_token") else "❌")
+                    _row[4].markdown("✅ 已导入" if _is_synced else "⏳ 待导入")
+                    with _row[5]:
                         if st.button(
                             "已导入" if _is_synced else "导入",
                             key=f"sync_single_{_idx}",
@@ -1982,24 +2298,150 @@ with col_right:
                 st.warning("请先配置 API 地址和 Admin Token")
 
             if _sync_all_btn:
-                with st.spinner(f"正在导入 {len(_syncable)} 个账号..."):
-                    _import_results = _do_newapi_import(
-                        _syncable, _newapi_base, _newapi_token,
-                        _newapi_type, _newapi_models, _newapi_group,
-                        _newapi_priority, _newapi_weight,
-                    )
-                _ok = sum(1 for _, s, _ in _import_results if s)
-                _fail = sum(1 for _, s, _ in _import_results if not s)
-                if _ok:
-                    st.success(f"✅ 成功导入 {_ok} 个账号")
-                if _fail:
-                    st.error(f"❌ 失败 {_fail} 个账号")
-                for _email, _succ, _msg in _import_results:
-                    if _succ:
-                        st.write(f"✅ {_email}")
-                    else:
-                        st.write(f"❌ {_email}: {_msg}")
-                if _ok:
+                # 全屏导入遮罩 + 实时日志
+                import requests as _req
+                _overlay = st.container()
+                with _overlay:
+                    st.markdown("""
+                    <style>
+                    .sync-overlay {
+                        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+                        background: rgba(0,0,0,0.5); z-index: 99999;
+                        display: flex; align-items: center; justify-content: center;
+                    }
+                    .sync-modal {
+                        background: white; border-radius: 12px; padding: 32px 40px;
+                        width: 600px; max-height: 80vh; overflow-y: auto;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                    }
+                    .sync-modal h3 { margin: 0 0 16px; font-size: 20px; color: #1a73e8; }
+                    .sync-log { font-family: "Source Code Pro", monospace; font-size: 13px;
+                                line-height: 1.6; color: #333; max-height: 50vh; overflow-y: auto;
+                                padding: 12px; background: #f8f9fa; border-radius: 8px; border: 1px solid #e0e0e0; }
+                    .sync-progress { margin: 12px 0; }
+                    .sync-progress-bar { height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; }
+                    .sync-progress-fill { height: 100%; background: linear-gradient(90deg, #1a73e8, #34a853);
+                                          border-radius: 4px; transition: width 0.3s; }
+                    .sync-stats { display: flex; gap: 24px; margin-top: 12px; font-size: 14px; }
+                    .sync-stats span { font-weight: 600; }
+                    .sync-ok { color: #137333; }
+                    .sync-fail { color: #c5221f; }
+                    </style>
+                    """, unsafe_allow_html=True)
+
+                    _total_sync = len(_syncable)
+                    _progress_placeholder = st.empty()
+                    _log_placeholder = st.empty()
+                    _log_lines = []
+                    _ok_count = 0
+                    _fail_count = 0
+
+                    headers = {
+                        "Authorization": f"Bearer {_newapi_token}",
+                        "Content-Type": "application/json",
+                        "New-Api-User": "1",
+                    }
+                    _base = _newapi_base.rstrip("/")
+
+                    for _si, cd in enumerate(_syncable):
+                        _s_email = cd.get("email", "unknown")
+                        _pct = int((_si / _total_sync) * 100)
+
+                        _progress_placeholder.markdown(f"""
+                        <div class="sync-overlay">
+                        <div class="sync-modal">
+                            <h3>🔄 正在批量导入到 NewAPI...</h3>
+                            <div class="sync-progress">
+                                <div class="sync-progress-bar"><div class="sync-progress-fill" style="width:{_pct}%"></div></div>
+                            </div>
+                            <div class="sync-stats">
+                                <div>进度: <span>{_si}/{_total_sync}</span></div>
+                                <div class="sync-ok">成功: <span>{_ok_count}</span></div>
+                                <div class="sync-fail">失败: <span>{_fail_count}</span></div>
+                            </div>
+                            <div style="margin-top:8px;font-size:13px;color:#888;">当前: {_s_email}</div>
+                        </div></div>
+                        """, unsafe_allow_html=True)
+
+                        _CRED_KEYS = {
+                            "type", "email", "expired", "id_token", "account_id",
+                            "access_token", "last_refresh", "refresh_token",
+                            "session_token", "device_id", "csrf_token", "password",
+                        }
+                        key_data = {k: v for k, v in cd.items() if k in _CRED_KEYS}
+                        key_json = json.dumps(key_data, ensure_ascii=False)
+                        payload = {
+                            "mode": "single",
+                            "channel": {
+                                "type": int(_newapi_type) if _newapi_type.isdigit() else 57,
+                                "name": f"codex-{_s_email}",
+                                "key": key_json,
+                                "models": _newapi_models.strip(),
+                                "group": _newapi_group.strip(),
+                                "priority": int(_newapi_priority) if str(_newapi_priority).lstrip("-").isdigit() else 0,
+                                "weight": int(_newapi_weight) if str(_newapi_weight).lstrip("-").isdigit() else 0,
+                            },
+                        }
+                        try:
+                            resp = _req.post(f"{_base}/api/channel/", headers=headers, json=payload, timeout=30)
+                            if resp.status_code == 200:
+                                try:
+                                    rj = resp.json()
+                                    if rj.get("success"):
+                                        _ok_count += 1
+                                        _mark_synced(cd)
+                                        _log_lines.append(f"✅ [{_si+1}/{_total_sync}] {_s_email} — 导入成功")
+                                    else:
+                                        _fail_count += 1
+                                        _msg = rj.get("message", resp.text[:200])
+                                        _log_lines.append(f"❌ [{_si+1}/{_total_sync}] {_s_email} — {_msg}")
+                                except Exception:
+                                    _fail_count += 1
+                                    _log_lines.append(f"❌ [{_si+1}/{_total_sync}] {_s_email} — 返回非 JSON: {resp.text[:100]}")
+                            else:
+                                _fail_count += 1
+                                _log_lines.append(f"❌ [{_si+1}/{_total_sync}] {_s_email} — HTTP {resp.status_code}: {resp.text[:100]}")
+                        except Exception as e:
+                            _fail_count += 1
+                            _log_lines.append(f"❌ [{_si+1}/{_total_sync}] {_s_email} — 请求异常: {str(e)[:100]}")
+
+                        _log_html = "<br>".join(_log_lines[-50:])  # 仅展示最近50行
+                        _log_placeholder.markdown(f"""
+                        <div class="sync-overlay">
+                        <div class="sync-modal">
+                            <h3>🔄 正在批量导入到 NewAPI...</h3>
+                            <div class="sync-progress">
+                                <div class="sync-progress-bar"><div class="sync-progress-fill" style="width:{int((_si+1)/_total_sync*100)}%"></div></div>
+                            </div>
+                            <div class="sync-stats">
+                                <div>进度: <span>{_si+1}/{_total_sync}</span></div>
+                                <div class="sync-ok">成功: <span>{_ok_count}</span></div>
+                                <div class="sync-fail">失败: <span>{_fail_count}</span></div>
+                            </div>
+                            <div class="sync-log">{_log_html}</div>
+                        </div></div>
+                        """, unsafe_allow_html=True)
+
+                    # 完成后短暂展示最终状态
+                    import time as _time
+                    _log_html = "<br>".join(_log_lines[-50:])
+                    _log_placeholder.markdown(f"""
+                    <div class="sync-overlay">
+                    <div class="sync-modal">
+                        <h3>✅ 批量导入完成</h3>
+                        <div class="sync-progress">
+                            <div class="sync-progress-bar"><div class="sync-progress-fill" style="width:100%"></div></div>
+                        </div>
+                        <div class="sync-stats">
+                            <div>总共: <span>{_total_sync}</span></div>
+                            <div class="sync-ok">成功: <span>{_ok_count}</span></div>
+                            <div class="sync-fail">失败: <span>{_fail_count}</span></div>
+                        </div>
+                        <div class="sync-log">{_log_html}</div>
+                        <div style="text-align:center;margin-top:16px;font-size:13px;color:#888;">3 秒后自动刷新...</div>
+                    </div></div>
+                    """, unsafe_allow_html=True)
+                    _time.sleep(3)
                     st.rerun()
 
 # ════════════════════════════════════════

@@ -207,3 +207,31 @@ def load_code_config(code: str) -> Optional[dict]:
         except Exception:
             return None
     return None
+
+
+def record_execution(code: str, status: str, email: str = "",
+                     error_msg: str = "", result_json: str = "",
+                     plan_type: str = "") -> Optional[int]:
+    """
+    直接插入一条执行记录 (不走 reserve/complete 额度流程)。
+    用于批量注册等场景，每个任务完成后独立记录。
+    - 成功: 消耗兑换码 1 次额度 (used_count + 1)
+    - 失败: 不消耗额度
+    返回 execution_id。
+    """
+    import json as _json
+    now = datetime.now().isoformat()
+    with get_db() as conn:
+        cursor = conn.execute(
+            "INSERT INTO executions (code, plan_type, status, reserved_amount, "
+            "email, error_msg, result_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)",
+            (code.strip(), plan_type, status, email, error_msg, result_json, now, now),
+        )
+        # 成功时消耗 1 次兑换码额度, 失败不消耗
+        if status == "success" and code.strip():
+            conn.execute(
+                "UPDATE codes SET used_count = used_count + 1 WHERE code = ?",
+                (code.strip(),),
+            )
+        return cursor.lastrowid

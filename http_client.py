@@ -12,10 +12,13 @@ try:
     from curl_cffi.requests import Session as CffiSession
 
     _HAS_CFFI = True
-    logger.debug("curl_cffi 可用，使用 TLS 指纹模拟")
+    logger.info("curl_cffi 可用，使用 TLS 指纹模拟")
 except ImportError:
     _HAS_CFFI = False
-    logger.debug("curl_cffi 不可用，降级到 requests")
+    logger.warning(
+        "⚠️ curl_cffi 不可用，降级到 requests (无 TLS 指纹模拟，可能被 Cloudflare 拦截)。"
+        "请安装: pip install curl_cffi"
+    )
 
 import requests
 from requests.adapters import HTTPAdapter
