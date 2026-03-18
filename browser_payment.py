@@ -1390,6 +1390,10 @@ class BrowserPayment:
                 page = context.new_page()
                 page.set_default_timeout(timeout * 1000)
 
+                # 捕获浏览器 console 日志 (诊断 JS 错误)
+                page.on("console", lambda msg: logger.info(f"[Console] [{msg.type}] {msg.text[:200]}"))
+                page.on("pageerror", lambda err: logger.warning(f"[PageError] {str(err)[:300]}"))
+
                 # Step 1: 先访问 chatgpt.com 通过 Cloudflare
                 logger.info("[Checkout] 通过 Cloudflare...")
                 page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
@@ -1448,12 +1452,49 @@ class BrowserPayment:
                         break
                     if _pe_wait % 5 == 4:
                         logger.info(f"[Checkout] 等待中... ({(_pe_wait+1)*3}s, iframes={len(_iframes)})")
+                        # 诊断: 输出页面 HTML 摘要
+                        try:
+                            _diag = page.evaluate("""
+                                (() => {
+                                    const html = document.documentElement.outerHTML;
+                                    const scripts = document.querySelectorAll('script[src]');
+                                    const scriptSrcs = Array.from(scripts).map(s => s.src).filter(s => s.includes('stripe')).join(', ');
+                                    const iframes = document.querySelectorAll('iframe');
+                                    const iframeSrcs = Array.from(iframes).map(i => i.src || i.name).join(', ');
+                                    const errors = window.__pageErrors || [];
+                                    return {
+                                        htmlLen: html.length,
+                                        title: document.title,
+                                        bodyText: (document.body ? document.body.innerText : '').substring(0, 200),
+                                        stripeScripts: scriptSrcs,
+                                        allIframes: iframeSrcs,
+                                        url: location.href,
+                                    };
+                                })()
+                            """)
+                            logger.info(f"[Checkout] 诊断: html={_diag.get('htmlLen',0)}B title={_diag.get('title','')} stripeJS={_diag.get('stripeScripts','none')} iframes=[{_diag.get('allIframes','')}] body={_diag.get('bodyText','')[:150]}")
+                        except Exception as _de:
+                            logger.warning(f"[Checkout] 诊断失败: {_de}")
                 time.sleep(2)
 
                 if not stripe_loaded:
                     body_text = page.evaluate("document.body ? document.body.innerText.substring(0, 500) : ''")
                     page_url = page.url
-                    logger.warning(f"[Checkout] Stripe 未加载, URL: {page_url}, 页面: {body_text[:300]}")
+                    # 保存截图
+                    try:
+                        os.makedirs("test_outputs", exist_ok=True)
+                        page.screenshot(path="test_outputs/checkout_stripe_fail.png", full_page=True)
+                        logger.info("[Checkout] 截图已保存: test_outputs/checkout_stripe_fail.png")
+                    except Exception as _se:
+                        logger.warning(f"[Checkout] 截图失败: {_se}")
+                    # 输出完整 HTML 长度和关键元素
+                    try:
+                        _html_len = page.evaluate("document.documentElement.outerHTML.length")
+                        _all_iframes = page.evaluate("Array.from(document.querySelectorAll('iframe')).map(i => ({src: i.src, name: i.name, w: i.width, h: i.height}))")
+                        logger.warning(f"[Checkout] Stripe 未加载, URL: {page_url}, HTML长度: {_html_len}, 页面文本: {body_text[:300]}")
+                        logger.warning(f"[Checkout] 所有 iframes: {_all_iframes}")
+                    except Exception:
+                        logger.warning(f"[Checkout] Stripe 未加载, URL: {page_url}, 页面: {body_text[:300]}")
                     return {"success": False, "error": f"Stripe Payment Element 未加载 ({page_url})"}
 
                 # 模拟人类行为
