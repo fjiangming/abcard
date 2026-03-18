@@ -130,7 +130,7 @@ class AuthResult:
             "access_token": self.access_token,
             "last_refresh": last_refresh,
             "refresh_token": self.refresh_token,
-            # ABCard 额外字段
+            # OpenAi-AGBC 额外字段
             "session_token": self.session_token,
             "device_id": self.device_id,
             "csrf_token": self.csrf_token,

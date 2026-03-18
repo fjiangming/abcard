@@ -1,4 +1,4 @@
-# ABCard — ChatGPT Business / Plus 自动开通
+# OpenAi-AGBC — ChatGPT Business / Plus 自动开通
 
 全自动注册 ChatGPT 账号 + 开通 Business 或 Plus 套餐（首月免费），支持 Web UI 操作。
 
@@ -222,7 +222,7 @@ print(f"Success: {result['success']}")
 ## 项目结构
 
 ```
-auto_bindcard/
+OpenAi-AGBC/
 ├── browser_payment.py     # 核心: 浏览器支付 (Checkout + Stripe 填表 + hCaptcha)
 ├── auth_flow.py           # API 注册 (10 步)
 ├── mail_provider.py       # 临时邮箱 + OTP
@@ -271,8 +271,29 @@ sudo bash deploy.sh
 
 ## License
 
-MIT
+MIT License
 
-📩 Disclaimer | 免责声明
+Copyright (c) 2026 fjiangming
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## Disclaimer | 免责声明
+
 本工具仅供学习和研究使用，使用本工具所产生的任何后果由使用者自行承担。
 This tool is only for learning and research purposes, and any consequences arising from the use of this tool are borne by the user.
