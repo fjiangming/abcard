@@ -53,3 +53,11 @@ xray_client.json
 
 # 部署数据目录
 data/
+
+# Nuitka 构建报告
+nuitka-crash-report.xml
+
+# EXE 打包构建产物 (仅保留打包脚本)
+exe/build/
+exe/dist/
+exe/__pycache__/

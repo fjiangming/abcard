@@ -6,6 +6,7 @@
 
 | 脚本 | 用途 |
 |------|------|
+| `card_format_converter.py` | 卡片信息格式转换：将原始卡片数据（空格分隔、含多余字段）转换为统一的 `key: value` 格式，支持批量转换、文件/stdin/剪贴板输入 |
 | `backfill_result_json.py` | 回填脚本：将 `test_outputs/credentials_*.json` 中的凭证数据同步到 `data.db` 的 `executions` 表，补全缺失字段并关联兑换码 |
 | `sync_status_checker.py` | NewAPI 同步状态校验：通过 NewAPI 搜索接口检查每个账号是否已同步，更新本地 JSON 和数据库中的 `synced_to_newapi` 状态，并生成校验报告 |
 | `setup_env.sh` | Linux/WSL 环境一键初始化：安装 Python 依赖和 Chromium 系统库、启动 Xvfb 虚拟显示器、验证 Chrome 可运行、自动检测 WSL 代理并提示配置 |
@@ -14,6 +15,13 @@
 ## 使用方式
 
 ```bash
+# 卡片格式转换（三种输入方式）
+python tool/card_format_converter.py cards.txt                 # 从文件读取
+python tool/card_format_converter.py cards.txt -o output.txt   # 输出到文件
+python tool/card_format_converter.py -c                        # 从剪贴板读取
+echo "..." | python tool/card_format_converter.py              # 管道输入
+python tool/card_format_converter.py                           # 交互式粘贴（Ctrl+Z 结束）
+
 # 回填凭证到数据库（需指定兑换码）
 python tool/backfill_result_json.py --code XXXX-XXXX-XXXX
 

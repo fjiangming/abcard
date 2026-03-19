@@ -13,6 +13,7 @@
 """
 import json
 import logging
+import sys
 import os
 import random
 import re
@@ -185,6 +186,14 @@ class BrowserPayment:
             billing_email=billing_email,
         )
 
+        # Windows 后台线程需要显式设置支持 subprocess 的事件循环
+        if sys.platform == "win32":
+            import asyncio
+            try:
+                asyncio.set_event_loop(asyncio.ProactorEventLoop())
+            except Exception:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+
         with sync_playwright() as p:
             # ── CDP 模式: 手动启动 Chrome, 通过 CDP 连接 ──
             # Playwright connect_over_cdp 不注入自动化标记:
@@ -193,7 +202,8 @@ class BrowserPayment:
             # hCaptcha Enterprise 看到的是原生 Chrome 指纹
             chrome_path = self._find_chrome_binary()
             cdp_port = random.randint(9300, 9400)
-            user_data_dir = f"/tmp/cdp-stripe-{cdp_port}"
+            import tempfile
+            user_data_dir = os.path.join(tempfile.gettempdir(), f"cdp-stripe-{cdp_port}")
 
             # 清理旧数据目录
             import shutil
@@ -1012,26 +1022,56 @@ class BrowserPayment:
     @staticmethod
     def _find_chrome_binary() -> str:
         """查找可用的 Chrome/Chromium 二进制文件"""
-        # 优先使用 Playwright 自带的 Chrome for Testing (已验证可 CDP)
-        pw_chrome = os.path.expanduser("~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome")
-        if os.path.isfile(pw_chrome):
-            return pw_chrome
-
-        # 系统 Chrome
-        for path in [
-            "/opt/google/chrome/chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/chromium",
-        ]:
-            if os.path.isfile(path):
-                return path
-
-        # Playwright 其他版本
         import glob as gl
-        pw_chromes = gl.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"))
-        if pw_chromes:
-            return sorted(pw_chromes)[-1]
+
+        # 优先: 应用内置浏览器 (build/browsers/ 或 PLAYWRIGHT_BROWSERS_PATH)
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        local_browsers = os.path.join(os.path.dirname(app_dir), "browsers")
+        env_browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+        for browsers_dir in [local_browsers, env_browsers]:
+            if browsers_dir and os.path.isdir(browsers_dir):
+                if sys.platform == "win32":
+                    chromes = gl.glob(os.path.join(browsers_dir, "chromium-*", "chrome-win64", "chrome.exe"))
+                else:
+                    chromes = gl.glob(os.path.join(browsers_dir, "chromium-*", "chrome-linux64", "chrome"))
+                if chromes:
+                    return sorted(chromes)[-1]
+
+        if sys.platform == "win32":
+            # Windows: 用户 Playwright 浏览器
+            pw_base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ms-playwright")
+            pw_chromes = gl.glob(os.path.join(pw_base, "chromium-*", "chrome-win64", "chrome.exe"))
+            if pw_chromes:
+                return sorted(pw_chromes)[-1]
+
+            # Windows: 系统 Chrome
+            for path in [
+                os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            ]:
+                if os.path.isfile(path):
+                    return path
+        else:
+            # Linux: Playwright 自带的 Chrome for Testing
+            pw_chrome = os.path.expanduser("~/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome")
+            if os.path.isfile(pw_chrome):
+                return pw_chrome
+
+            # Linux: 系统 Chrome
+            for path in [
+                "/opt/google/chrome/chrome",
+                "/usr/bin/google-chrome-stable",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+            ]:
+                if os.path.isfile(path):
+                    return path
+
+            # Linux: Playwright 其他版本
+            pw_chromes = gl.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"))
+            if pw_chromes:
+                return sorted(pw_chromes)[-1]
 
         raise FileNotFoundError("No Chrome/Chromium binary found")
 
@@ -1290,10 +1330,18 @@ class BrowserPayment:
         checkout_url = f"https://chatgpt.com/checkout/openai_llc/{checkout_session_id}"
         logger.info(f"[Checkout] 导航到 ChatGPT checkout: {checkout_url[:80]}...")
 
+        # Windows 后台线程: 必须设置 Policy 而非仅设置当前 loop,
+        # 因为 Playwright 内部会调用 asyncio.new_event_loop() 创建自己的循环,
+        # SelectorEventLoop 不支持 subprocess, 必须用 ProactorEventLoop
+        if sys.platform == "win32":
+            import asyncio
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
         with sync_playwright() as p:
             chrome_path = self._find_chrome_binary()
             cdp_port = random.randint(9300, 9400)
-            user_data_dir = f"/tmp/cdp-checkout-{cdp_port}"
+            import tempfile
+            user_data_dir = os.path.join(tempfile.gettempdir(), f"cdp-checkout-{cdp_port}")
 
             import shutil
             if os.path.exists(user_data_dir):

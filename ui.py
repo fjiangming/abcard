@@ -1448,16 +1448,17 @@ if do_payment: steps_list.append("支付")
 
 
 with col_mid:
-    # 额度提示
-    if flow_mode == "仅注册":
-        if batch_total > 1:
-            st.info(f"🆕 批量注册模式: **{batch_total}** 条, 并发 **{batch_concurrency}**")
+    # 额度提示 (仅在兑换码系统启用时显示)
+    if _ENABLE_CODE_SYSTEM:
+        if flow_mode == "仅注册":
+            if batch_total > 1:
+                st.info(f"🆕 批量注册模式: **{batch_total}** 条, 并发 **{batch_concurrency}**")
+            else:
+                st.info("🆕 仅注册模式: 消耗 **1** 次额度")
+        elif flow_mode == "仅绑卡":
+            st.info("💳 仅绑卡模式: 消耗 **1** 次额度")
         else:
-            st.info("🆕 仅注册模式: 消耗 **1** 次额度")
-    elif flow_mode == "仅绑卡":
-        st.info("💳 仅绑卡模式: 消耗 **1** 次额度")
-    else:
-        st.info("🔗 注册 + 绑卡模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
+            st.info("🔗 注册 + 绑卡模式: 成功消耗 **2** 次额度，失败消耗 **1** 次")
     btn_col1, btn_col2 = st.columns([4, 1])
     with btn_col1:
         run_btn = st.button("开始执行", disabled=st.session_state.running or not steps_list,
