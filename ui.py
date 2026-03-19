@@ -1224,10 +1224,10 @@ with col_left:
     if flow_mode == "仅注册":
         with st.expander("批量注册设置", expanded=True):
             _bc1, _bc2 = st.columns(2)
-            batch_total = _bc1.number_input("注册数量", min_value=1, max_value=100, value=1, key="w_batch_total",
+            batch_total = _bc1.number_input("注册数量", min_value=1, max_value=10000, value=1, key="w_batch_total",
                                             help="设为 1 则为单次注册，大于 1 启用批量并发注册")
-            batch_concurrency = _bc2.number_input("并发数", min_value=1, max_value=10, value=3, key="w_batch_concurrency",
-                                                  help="同时执行的注册任务数，建议 2-5")
+            batch_concurrency = _bc2.number_input("并发数", min_value=1, max_value=20, value=3, key="w_batch_concurrency",
+                                                  help="同时执行的注册任务数，代理质量好可适当调高")
             auto_sync_newapi = st.checkbox("注册后自动同步", value=st.session_state.get("w_auto_sync_newapi", False),
                                            key="w_auto_sync_newapi",
                                            help="注册成功后自动将凭证同步到 NewAPI 渠道（需先在右侧「同步」tab 配置 NewAPI 参数）")

@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    container_name: openai-agbc
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 800M

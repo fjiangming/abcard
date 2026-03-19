@@ -1,21 +1,21 @@
-MIT License
+Proprietary License
 
-Copyright (c) 2026 fjiangming
+Copyright (c) 2026 fjiangming. All Rights Reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本软件及其相关文档文件（以下统称"软件"）的所有权利均归版权所有者 fjiangming 所有。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+使用限制：
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. 本软件不以免费方式授予任何使用许可。未经版权所有者书面授权，任何人不得使用、复制或分发本软件。
+
+2. 严禁对本软件进行修改、反编译、反汇编、逆向工程或任何形式的二次开发。
+
+3. 严禁将本软件（无论原始版本或修改版本）用于商业销售、再分发、转授权或任何形式的商业用途。
+
+4. 未经版权所有者事先书面同意，不得将本软件的全部或部分内容提供给任何第三方。
+
+免责声明：
+
+本软件按"现状"提供，不附带任何明示或暗示的担保，包括但不限于对适销性、特定用途适用性和非侵权性的担保。在任何情况下，版权所有者均不对因使用或无法使用本软件而产生的任何直接、间接、附带、特殊、惩罚性或后果性损害承担责任。
+
+违反本许可条款的任何使用行为均属违法，版权所有者保留追究法律责任的权利。

@@ -241,6 +241,11 @@ OpenAi-AGBC/
 ├── test_all.py            # 单元测试
 ├── config.example.json    # 配置模板
 ├── requirements.txt
+├── Dockerfile             # Docker 镜像定义
+├── docker-compose.yml     # Docker Compose 配置
+├── docker-entrypoint.sh   # 容器启动入口
+├── deploy-docker.sh       # Linux Docker 一键部署
+├── deploy.ps1             # Windows 一键部署
 └── README.md
 ```
 
@@ -262,12 +267,52 @@ OpenAi-AGBC/
 
 ## 部署
 
+### 方式一：Docker 部署（推荐）
+
+容器化部署，**完全隔离不污染宿主机**。数据持久化在 `./data/` 目录。
+
 ```bash
-# 使用自动部署脚本 (Ubuntu/Debian)
-sudo bash deploy.sh
+# 一键部署 (自动安装 Docker)
+sudo bash deploy-docker.sh
+
+# 查看状态
+sudo bash deploy-docker.sh --status
+
+# 更新版本
+sudo bash deploy-docker.sh --update
+
+# 卸载清理
+sudo bash deploy-docker.sh --uninstall
 ```
 
-脚本会自动创建系统服务、配置 Swap（1G 小机必需）、安装所有依赖。
+| 项目 | 说明 |
+|------|------|
+| 部署目录 | 项目源码所在目录 |
+| 数据目录 | `./data/`（config.json + data.db） |
+| 访问地址 | `http://<IP>:8501` |
+| 容器隔离 | ✅ 完全隔离 |
+
+### 方式二：Windows 本地部署
+
+所有文件在项目目录内（`.venv/` + `data/`），不污染系统。
+
+```powershell
+# 部署并启动
+powershell -ExecutionPolicy Bypass -File deploy.ps1
+
+# 查看状态
+powershell -File deploy.ps1 -Action status
+
+# 停止服务
+powershell -File deploy.ps1 -Action stop
+
+# 卸载清理
+powershell -File deploy.ps1 -Action uninstall
+```
+
+### 方式三：手动部署
+
+参考「快速开始」章节手动安装依赖并启动。
 
 ## License
 

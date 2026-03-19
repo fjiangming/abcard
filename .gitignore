@@ -50,3 +50,6 @@ dev_tests/
 Thumbs.db
 *:Zone.Identifier
 xray_client.json
+
+# 部署数据目录
+data/
