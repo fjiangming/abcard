@@ -14,7 +14,7 @@
 
 services:
   app:
-    image: ghcr.io/fjiangming/openai-agbc:latest
+    image: ghcr.io/fjiangming/openai-agbc:dev
     container_name: openai-agbc
     ports:
       - "8501:8501"
