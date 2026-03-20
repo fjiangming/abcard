@@ -274,7 +274,7 @@ OpenAi-AGBC/
 
 ```bash
 # 1. 下载部署文件
-curl -fsSL https://raw.githubusercontent.com/fjiangming/ABCard/main/docker-compose.prod.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/fjiangming/OpenAi-AGBC/main/docker-compose.prod.yml -o docker-compose.yml
 
 # 2. 一键部署
 docker compose up -d
