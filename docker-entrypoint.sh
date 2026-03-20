@@ -26,6 +26,9 @@ if [ -f /app/data/data.db ]; then
     ln -sf /app/data/data.db /app/data.db
 fi
 
+# 确保 test_outputs 目录存在 (用于 credentials 文件持久化)
+mkdir -p /app/test_outputs
+
 # ---- 3. 初始化数据库 ----
 python -c "from database import init_db; init_db(); print('[entrypoint] 数据库已初始化')"
 

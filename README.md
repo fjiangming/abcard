@@ -242,10 +242,13 @@ OpenAi-AGBC/
 ├── config.example.json    # 配置模板
 ├── requirements.txt
 ├── Dockerfile             # Docker 镜像定义
-├── docker-compose.yml     # Docker Compose 配置
+├── docker-compose.yml     # Docker Compose (本地构建)
+├── docker-compose.prod.yml # Docker Compose (远程镜像部署)
 ├── docker-entrypoint.sh   # 容器启动入口
 ├── deploy-docker.sh       # Linux Docker 一键部署
 ├── deploy.ps1             # Windows 一键部署
+├── .github/workflows/     # GitHub Actions CI/CD
+│   └── docker-publish.yml # 自动构建推送镜像到 GHCR
 └── README.md
 ```
 
@@ -267,9 +270,35 @@ OpenAi-AGBC/
 
 ## 部署
 
-### 方式一：Docker 部署（推荐）
+### 方式一：远程一键部署（推荐）
 
-容器化部署，**完全隔离不污染宿主机**。数据持久化在 `./data/` 目录。
+```bash
+# 1. 下载部署文件
+curl -fsSL https://raw.githubusercontent.com/fjiangming/ABCard/main/docker-compose.prod.yml -o docker-compose.yml
+
+# 2. 一键部署
+docker compose up -d
+
+# 3. 一键升级 (拉取最新镜像并重启)
+docker compose pull && docker compose up -d
+
+# 4. 查看日志
+docker compose logs -f
+
+# 5. 停止/卸载
+docker compose down
+```
+
+| 项目 | 说明 |
+|------|------|
+| 访问地址 | `http://<IP>:8501` |
+| 数据持久化 | `./data/`（config.json + data.db） |
+| 凭证持久化 | `./test_outputs/`（credentials JSON 文件） |
+| 升级方式 | `docker compose pull && docker compose up -d` |
+
+### 方式二：Docker 本地构建
+
+从源码构建镜像，适合开发调试。
 
 ```bash
 # 一键部署 (自动安装 Docker)
@@ -285,14 +314,7 @@ sudo bash deploy-docker.sh --update
 sudo bash deploy-docker.sh --uninstall
 ```
 
-| 项目 | 说明 |
-|------|------|
-| 部署目录 | 项目源码所在目录 |
-| 数据目录 | `./data/`（config.json + data.db） |
-| 访问地址 | `http://<IP>:8501` |
-| 容器隔离 | ✅ 完全隔离 |
-
-### 方式二：Windows 本地部署
+### 方式三：Windows 本地部署
 
 所有文件在项目目录内（`.venv/` + `data/`），不污染系统。
 
@@ -310,7 +332,7 @@ powershell -File deploy.ps1 -Action stop
 powershell -File deploy.ps1 -Action uninstall
 ```
 
-### 方式三：手动部署
+### 方式四：手动部署
 
 参考「快速开始」章节手动安装依赖并启动。
 

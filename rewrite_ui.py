@@ -1505,8 +1505,52 @@ with tab_history:
     else:
         st.info("暂无执行历史")
 
-    if st.button("刷新", key="ref_hist"):
-        st.rerun()
+    # ── 导出全部 credentials 为 ZIP ──
+    _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
+    _export_files = []
+    if os.path.isdir(_cred_dir):
+        for _fn in sorted(os.listdir(_cred_dir)):
+            if _fn.startswith("credentials_") and _fn.endswith(".json"):
+                _fpath = os.path.join(_cred_dir, _fn)
+                try:
+                    with open(_fpath, encoding="utf-8") as _f:
+                        _export_files.append((_fpath, json.load(_f)))
+                except Exception:
+                    pass
+
+    _exp_col1, _exp_col2 = st.columns([4, 1])
+    with _exp_col1:
+        if _export_files:
+            import io
+            import zipfile
+            _zip_buf = io.BytesIO()
+            with zipfile.ZipFile(_zip_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
+                _seen_emails = {}
+                for _fpath, _cd in _export_files:
+                    _email = _cd.get("email", "unknown")
+                    # 处理同名邮箱：追加序号
+                    if _email in _seen_emails:
+                        _seen_emails[_email] += 1
+                        _arc_name = f"{_email}_{_seen_emails[_email]}.json"
+                    else:
+                        _seen_emails[_email] = 0
+                        _arc_name = f"{_email}.json"
+                    _zf.writestr(_arc_name, json.dumps(_cd, ensure_ascii=False, indent=2))
+            _zip_buf.seek(0)
+            from datetime import datetime as _dt
+            _zip_name = f"credentials_{_dt.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            st.download_button(
+                f"📦 导出全部 ({len(_export_files)} 个账号)",
+                data=_zip_buf.getvalue(),
+                file_name=_zip_name,
+                mime="application/zip",
+                use_container_width=True,
+            )
+        else:
+            st.info("暂无 credentials 文件可导出")
+    with _exp_col2:
+        if st.button("刷新", key="ref_hist"):
+            st.rerun()
 
 
 # ════════════════════════════════════════

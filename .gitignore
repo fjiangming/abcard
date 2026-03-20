@@ -61,3 +61,7 @@ nuitka-crash-report.xml
 exe/build/
 exe/dist/
 exe/__pycache__/
+
+# RSA 私钥 (License 签名密钥，切勿泄露)
+exe/private_key.pem
+*.key

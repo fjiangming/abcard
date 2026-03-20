@@ -1,0 +1,28 @@
+# ============================================
+# OpenAi-AGBC 远程部署 (拉取预构建镜像)
+#
+# 一键部署:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 一键升级:
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# 查看日志:
+#   docker compose -f docker-compose.prod.yml logs -f
+# ============================================
+
+services:
+  app:
+    image: ghcr.io/fjiangming/abcard:latest
+    container_name: openai-agbc
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./test_outputs:/app/test_outputs
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 800M

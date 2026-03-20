@@ -83,6 +83,13 @@ case "${1:-}" in
     *)           echo "用法: $0 [--update|--uninstall|--status]"; exit 1 ;;
 esac
 
+# ---- 自动检测 prod 模式 ----
+if [ -f "docker-compose.prod.yml" ] && ! [ -f "Dockerfile" ]; then
+    COMPOSE_FILE="docker-compose.prod.yml"
+else
+    COMPOSE_FILE="docker-compose.yml"
+fi
+
 # ---- 主流程 ----
 echo ""
 echo "============================="
@@ -130,19 +137,26 @@ else
     ok "config.json 已存在"
 fi
 
-# ---- 3. 构建镜像 ----
-info "[3/4] 构建 Docker 镜像..."
-if [ "$UPDATE_MODE" = true ]; then
-    $COMPOSE_CMD build --no-cache
+# ---- 3. 构建/拉取镜像 ----
+info "[3/4] 准备 Docker 镜像... (使用 $COMPOSE_FILE)"
+if [ "$COMPOSE_FILE" = "docker-compose.prod.yml" ]; then
+    # prod 模式: 从 GHCR 拉取预构建镜像
+    $COMPOSE_CMD -f $COMPOSE_FILE pull
+    ok "镜像拉取完成"
 else
-    $COMPOSE_CMD build
+    # dev 模式: 本地构建
+    if [ "$UPDATE_MODE" = true ]; then
+        $COMPOSE_CMD -f $COMPOSE_FILE build --no-cache
+    else
+        $COMPOSE_CMD -f $COMPOSE_FILE build
+    fi
+    ok "镜像构建完成"
 fi
-ok "镜像构建完成"
 
 # ---- 4. 启动容器 ----
 info "[4/4] 启动容器..."
-$COMPOSE_CMD down 2>/dev/null || true
-$COMPOSE_CMD up -d
+$COMPOSE_CMD -f $COMPOSE_FILE down 2>/dev/null || true
+$COMPOSE_CMD -f $COMPOSE_FILE up -d
 ok "容器已启动"
 
 # ---- 完成 ----
@@ -159,7 +173,7 @@ echo "  常用命令:"
 echo "    查看状态:    $COMPOSE_CMD ps"
 echo "    查看日志:    $COMPOSE_CMD logs -f"
 echo "    重启服务:    $COMPOSE_CMD restart"
-echo "    停止服务:    $COMPOSE_CMD down"
-echo "    更新部署:    sudo bash deploy-docker.sh --update"
+echo "    停止服务:    $COMPOSE_CMD -f $COMPOSE_FILE down"
+echo "    更新升级:    sudo bash deploy-docker.sh --update"
 echo "    卸载清理:    sudo bash deploy-docker.sh --uninstall"
 echo ""
