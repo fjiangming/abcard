@@ -5,11 +5,17 @@
 set -e
 
 # ---- 1. 启动 Xvfb 虚拟显示器 ----
+# 清理上次崩溃残留的锁文件
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+
 Xvfb :99 -screen 0 1280x720x24 -ac -nolisten tcp &
 export DISPLAY=:99
 
 # 等待 Xvfb 就绪
 sleep 1
+
+# ---- 确保挂载目录可写 ----
+mkdir -p /app/data /app/test_outputs
 
 # ---- 2. 初始化数据目录 ----
 # config.json: 优先使用挂载的配置，不存在则从模板创建

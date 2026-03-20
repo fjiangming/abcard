@@ -40,7 +40,8 @@ RUN mkdir -p /app/data && chown agbc:agbc /app/data
 COPY --chown=agbc:agbc docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
-USER agbc
+# 注: 不切换用户，以 root 运行避免挂载目录权限问题
+# Docker 本身已提供进程隔离
 
 EXPOSE 8501
 
