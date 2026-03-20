@@ -12,7 +12,8 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    shm_size: '256m'
     deploy:
       resources:
         limits:
-          memory: 800M
+          memory: 2G

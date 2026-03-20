@@ -22,7 +22,8 @@ services:
       - ./data:/app/data
       - ./test_outputs:/app/test_outputs
     restart: unless-stopped
+    shm_size: '256m'
     deploy:
       resources:
         limits:
-          memory: 800M
+          memory: 2G
