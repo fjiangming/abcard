@@ -1236,7 +1236,9 @@ class AuthFlow:
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error(f"[2/10] signin 失败: {resp.status_code} - {resp.text[:500]}")
+            raise RuntimeError(f"signin 失败: {resp.status_code} - {resp.text[:300]}")
         auth_url = resp.json().get("url", "")
         if not auth_url:
             raise RuntimeError("Auth URL 获取失败")
