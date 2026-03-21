@@ -2318,7 +2318,8 @@ with col_right:
                 buf.seek(0)
                 return buf.getvalue()
 
-            _unsynced_creds = [cd for cd in _cred_data_list if not cd.get("synced_to_newapi")]
+            _unsynced_creds = [cd for cd in _cred_data_list
+                               if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
             from datetime import datetime as _dt
             _dl_col1, _dl_col2 = st.columns(2)
             with _dl_col1:
