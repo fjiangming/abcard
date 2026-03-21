@@ -418,6 +418,16 @@ class AuthFlow:
         logger.info("[8/10] 创建账户...")
         headers = self._common_headers("https://auth.openai.com/about-you")
         headers["Content-Type"] = "application/json"
+
+        # 获取 sentinel token (create_account flow)
+        device_id = self.result.device_id or ""
+        if device_id:
+            try:
+                sentinel = self._get_sentinel_token_with_flow(device_id, "create_account")
+                headers["openai-sentinel-token"] = sentinel
+            except Exception as e:
+                logger.warning(f"sentinel (create_account) 获取失败, 继续: {e}")
+
         _FIRST_NAMES = [
             "James", "Emma", "Liam", "Olivia", "Noah", "Ava", "Oliver", "Sophia",
             "Elijah", "Isabella", "Lucas", "Mia", "Mason", "Charlotte", "Logan",
@@ -437,6 +447,7 @@ class AuthFlow:
         ]
         name = f"{random.choice(_FIRST_NAMES)} {random.choice(_LAST_NAMES)}"
         birthdate = f"{random.randint(1985, 2000)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
+        logger.info(f"[8/10] 提交: name={name}, birthdate={birthdate}")
         resp = self.session.post(
             "https://auth.openai.com/api/accounts/create_account",
             headers=headers,
