@@ -418,7 +418,24 @@ class AuthFlow:
         logger.info("[8/10] 创建账户...")
         headers = self._common_headers("https://auth.openai.com/about-you")
         headers["Content-Type"] = "application/json"
-        name = "Neo"
+        _FIRST_NAMES = [
+            "James", "Emma", "Liam", "Olivia", "Noah", "Ava", "Oliver", "Sophia",
+            "Elijah", "Isabella", "Lucas", "Mia", "Mason", "Charlotte", "Logan",
+            "Amelia", "Alexander", "Harper", "Ethan", "Evelyn", "Jacob", "Abigail",
+            "Michael", "Emily", "Daniel", "Elizabeth", "Henry", "Sofia", "Jackson",
+            "Avery", "Sebastian", "Ella", "Aiden", "Scarlett", "Matthew", "Grace",
+            "Samuel", "Chloe", "David", "Victoria", "Joseph", "Riley", "Carter",
+            "Aria", "Owen", "Lily", "Wyatt", "Aurora", "John", "Penelope",
+        ]
+        _LAST_NAMES = [
+            "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller",
+            "Davis", "Rodriguez", "Martinez", "Wilson", "Anderson", "Thomas",
+            "Taylor", "Moore", "Jackson", "Martin", "Lee", "Thompson", "White",
+            "Harris", "Clark", "Lewis", "Robinson", "Walker", "Young", "Allen",
+            "King", "Wright", "Scott", "Hill", "Green", "Adams", "Baker",
+            "Nelson", "Carter", "Mitchell", "Roberts", "Turner", "Phillips",
+        ]
+        name = f"{random.choice(_FIRST_NAMES)} {random.choice(_LAST_NAMES)}"
         birthdate = f"{random.randint(1985, 2000)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
         resp = self.session.post(
             "https://auth.openai.com/api/accounts/create_account",
