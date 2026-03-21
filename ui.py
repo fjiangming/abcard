@@ -53,6 +53,8 @@ _WIDGET_CONFIG_MAPPING = {
     # 注册
     "w_register_mode": ("register_mode",),
     "w_default_password": ("default_password",),
+    # 执行模式
+    "w_flow_mode": ("flow_mode",),
     # NewAPI
     "w_newapi_base": ("newapi", "base_url"),
     "w_newapi_token": ("newapi", "admin_token"),
@@ -89,6 +91,13 @@ def _apply_config_data(data: dict, force: bool = False):
                 val = None
                 break
         if val is not None and val != "":
+            # register_mode: DB 存 "otp"/"password" → 转为 radio 标签
+            if widget_key == "w_register_mode":
+                val = "密码注册" if str(val) == "password" else "OTP 注册"
+            # flow_mode: DB 存 "register"/"bindcard"/"register_bindcard" → 转为标签
+            elif widget_key == "w_flow_mode":
+                _flow_map = {"register": "仅注册", "bindcard": "仅绑卡", "register_bindcard": "注册 + 绑卡"}
+                val = _flow_map.get(str(val), str(val))
             if force:
                 st.session_state[widget_key] = str(val)
             else:
@@ -150,6 +159,10 @@ def _save_config_to_file(**overrides):
     data["register_mode"] = st.session_state.get("w_register_mode", "OTP 注册")
     data["register_mode"] = "password" if "密码" in data["register_mode"] else "otp"
     data["default_password"] = st.session_state.get("w_default_password", "") or None
+    # 执行模式
+    _fm = st.session_state.get("w_flow_mode", "仅注册")
+    _fm_map = {"仅注册": "register", "仅绑卡": "bindcard", "注册 + 绑卡": "register_bindcard"}
+    data["flow_mode"] = _fm_map.get(_fm, "register")
 
     # NewAPI
     data.setdefault("newapi", {})
@@ -198,6 +211,9 @@ def _collect_config_from_session() -> dict:
     rm = st.session_state.get("w_register_mode", "OTP 注册")
     data["register_mode"] = "password" if "密码" in rm else "otp"
     data["default_password"] = st.session_state.get("w_default_password", "") or None
+    _fm = st.session_state.get("w_flow_mode", "仅注册")
+    _fm_map = {"仅注册": "register", "仅绑卡": "bindcard", "注册 + 绑卡": "register_bindcard"}
+    data["flow_mode"] = _fm_map.get(_fm, "register")
     data["newapi"] = {
         "base_url": st.session_state.get("w_newapi_base", ""),
         "admin_token": st.session_state.get("w_newapi_token", ""),
@@ -1124,12 +1140,16 @@ with col_left:
 
     mode_col, proxy_col = st.columns([3, 2])
     with mode_col:
+        _flow_options = ["仅注册", "仅绑卡", "注册 + 绑卡"]
+        _cur_flow = st.session_state.get("w_flow_mode", "仅注册")
+        _flow_idx = _flow_options.index(_cur_flow) if _cur_flow in _flow_options else 0
         flow_mode = st.radio(
             "执行模式",
-            ["仅注册", "仅绑卡", "注册 + 绑卡"],
-            index=2,  # 默认二合一
+            _flow_options,
+            index=_flow_idx,
             horizontal=True,
             key="w_flow_mode",
+            on_change=_on_config_change,
         )
 
     # 根据模式派生控制标志
