@@ -125,7 +125,18 @@ streamlit run ui.py --server.port 8503 -- --dev
 
 ## 兑换码管理
 
-使用前需要先生成兑换码:
+> 需先在 `config.json` 中设置 `"code_system_enabled": true` 并重启服务。
+
+### 生成兑换码
+
+**Docker 环境（一行命令）：**
+
+```bash
+# 生成 5 个各可用 10 次的兑换码
+docker compose exec app python -c "from code_manager import create_codes; [print(c) for c in create_codes(count=5, total_uses=10)]"
+```
+
+**本地环境：**
 
 ```bash
 # 生成 10 个一次性兑换码
@@ -149,7 +160,8 @@ python3 admin_cli.py history XXXX-XXXX-XXXX
 
 ### 如何获取兑换码
 
-兑换码由 **管理员** 通过上述 `admin_cli.py generate` 命令生成后分发给用户。每个兑换码在生成时指定可用次数（`--uses`），用完即失效。
+兑换码由 **管理员** 通过上述命令生成后分发给用户。每个兑换码在生成时指定可用次数，用完即失效。
+
 
 ### 修改已有兑换码的可用次数
 

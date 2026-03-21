@@ -81,6 +81,7 @@ REQUIREMENTS = [
     "streamlit>=1.30.0",
     "pandas>=2.0.0",
     "playwright>=1.40.0",
+    "rsa>=4.9",
 ]
 
 
@@ -285,29 +286,35 @@ _AGBC_TIER = _os.environ.get("AGBC_LICENSE_TIER", "pro")
         patches_applied += 1
         print("  ✅ Patch 1: 注入 tier 读取")
 
-    # ── Patch 2: 修改执行模式选择 — Lite 版只允许 "仅注册" ──
-    # 找到流程模式选择的 radio，在其后注入 Lite 限制
-    old_flow_mode = '''    # 根据模式派生控制标志
-    do_register = flow_mode in ["仅注册", "注册 + 绑卡"]
-    do_checkout = flow_mode in ["仅绑卡", "注册 + 绑卡"]
-    do_payment = flow_mode in ["仅绑卡", "注册 + 绑卡"]'''
+    # ── Patch 2: Lite 版不渲染模式选择 radio，直接固定 "仅注册" ──
+    # 替换 radio 渲染代码，而非在其后覆盖
+    old_radio = '''        flow_mode = st.radio(
+            "执行模式",
+            ["仅注册", "仅绑卡", "注册 + 绑卡"],
+            index=2,  # 默认二合一
+            horizontal=True,
+            key="w_flow_mode",
+        )'''
 
-    new_flow_mode = '''    # ═══ [EXE版] Lite 版限制: 只允许 "仅注册" ═══
-    if _AGBC_TIER == "lite" and flow_mode != "仅注册":
-        flow_mode = "仅注册"
-        st.warning("⚠️ 当前为 **Lite 版**，仅支持注册功能。升级到 Pro 版解锁支付功能。")
+    new_radio = '''        if _AGBC_TIER == "lite":
+            flow_mode = "仅注册"
+            st.info("📋 **Lite 版** — 仅支持注册功能，升级到 Pro 版解锁绑卡")
+        else:
+            flow_mode = st.radio(
+                "执行模式",
+                ["仅注册", "仅绑卡", "注册 + 绑卡"],
+                index=2,  # 默认二合一
+                horizontal=True,
+                key="w_flow_mode",
+            )'''
 
-    # 根据模式派生控制标志
-    do_register = flow_mode in ["仅注册", "注册 + 绑卡"]
-    do_checkout = flow_mode in ["仅绑卡", "注册 + 绑卡"]
-    do_payment = flow_mode in ["仅绑卡", "注册 + 绑卡"]'''
-
-    if old_flow_mode in content:
-        content = content.replace(old_flow_mode, new_flow_mode, 1)
+    if old_radio in content:
+        content = content.replace(old_radio, new_radio, 1)
         patches_applied += 1
-        print("  ✅ Patch 2: 注入 Lite 执行模式限制")
+        print("  ✅ Patch 2: Lite 版 radio 替换为固定模式")
     else:
-        print("  ⚠️ Patch 2: 未找到执行模式代码块，请手动检查")
+        print("  ⚠️ Patch 2: 未找到 flow_mode radio 代码块，请手动检查")
+
 
     # (Patch 3 已移除: 标题中的隐式字符串拼接不能替换为表达式)
 

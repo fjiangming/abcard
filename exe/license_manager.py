@@ -1,31 +1,48 @@
 """
-License 验证模块 — HMAC-SHA256 签名 + 机器绑定
+License 验证模块 — RSA-2048 非对称签名 + 机器绑定
 
 License Key 格式:
-    BASE64(JSON{tier, machine_id, created_at}) . BASE64(HMAC_SIGNATURE)
+    BASE64(JSON{tier, machine_id, created_at}) . BASE64(RSA_SIGNATURE)
+
+安全模型:
+    - 客户端 (.pyd) 仅包含 RSA 公钥，只能验证签名
+    - 管理端 (license_gen.py) 持有 RSA 私钥，用于签名生成
+    - 即使客户端被完整逆向，也无法伪造 License
 
 tier: "lite" | "pro"
 machine_id: 机器唯一标识 (CPU + 主板 + 磁盘序列号的 SHA256 前 32 位)
-
-此模块编译为 .pyd 后分发，HMAC 密钥隐藏在二进制中。
 """
 import base64
 import hashlib
-import hmac
 import json
 import os
 import platform
 import subprocess
 import sys
 
+import rsa
+
 # ═══════════════════════════════════════════════
-# HMAC 签名密钥 (编译为 .pyd 后不可见)
-# 请在正式发布前修改此密钥!
+# RSA 公钥 (仅用于验证，无法用于签名)
+# 由 license_gen.py --gen-keys 自动生成并嵌入
 # ═══════════════════════════════════════════════
-_HMAC_SECRET = b"AGBC-2026-CHANGE-THIS-SECRET-KEY-BEFORE-RELEASE!!"
+_RSA_PUBLIC_KEY_PEM = b"""-----BEGIN RSA PUBLIC KEY-----
+MIIBCgKCAQEAsIs/XcfJnIbyCOKOI94RnaDkN1o2jzUiq5AVoOsW7I/v5mXwIFqn
+0PC72ASHHEqngZPrTUADaajAbGyCfXl1X3Aom+mSm6qVVs0mRkkEm73AGT3TAEYd
+GhGO198rG4qeBWXzoPobto6AbSHjJYNUf+Bu9J8qRtUrZRgntMGhPpaTs3ziM0aR
+YXc0mYdcR1yYE67EfQz7dwTyL8u1QWX657MzH9eKLpZTPSTTWxQalRrTYd2DEcdc
+KywP5JrrdIEfWHSIoYhn4enDfD79+g1U8Z4DGdPMDxBR3SJcdAQ8k62/+8qBd9CC
+yrQQw2OOtakWXwFE0yF9rKX2BVjNlgjcwwIDAQAB
+-----END RSA PUBLIC KEY-----
+"""
 
 # License 文件默认路径
 _LICENSE_FILENAME = "license.key"
+
+
+def _load_public_key() -> rsa.PublicKey:
+    """加载嵌入的 RSA 公钥"""
+    return rsa.PublicKey.load_pkcs1(_RSA_PUBLIC_KEY_PEM)
 
 
 def get_machine_id() -> str:
@@ -83,11 +100,6 @@ def get_machine_id() -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
-def _sign(data_bytes: bytes) -> bytes:
-    """HMAC-SHA256 签名"""
-    return hmac.new(_HMAC_SECRET, data_bytes, hashlib.sha256).digest()
-
-
 def _get_license_path() -> str:
     """License 文件默认存放路径 (与程序同目录)"""
     if getattr(sys, "frozen", False):
@@ -101,38 +113,9 @@ def _get_license_path() -> str:
     return os.path.join(base, _LICENSE_FILENAME)
 
 
-def generate_license(tier: str, machine_id: str) -> str:
-    """
-    生成 License Key (管理员调用)
-
-    Args:
-        tier: "lite" 或 "pro"
-        machine_id: 目标机器 ID (由买家提供)
-
-    Returns:
-        License Key 字符串
-    """
-    if tier not in ("lite", "pro"):
-        raise ValueError(f"无效的 tier: {tier}, 必须是 'lite' 或 'pro'")
-
-    from datetime import datetime
-    payload = {
-        "tier": tier,
-        "machine_id": machine_id,
-        "created_at": datetime.now().isoformat(),
-    }
-    payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    sig = _sign(payload_bytes)
-
-    payload_b64 = base64.urlsafe_b64encode(payload_bytes).decode()
-    sig_b64 = base64.urlsafe_b64encode(sig).decode()
-
-    return f"{payload_b64}.{sig_b64}"
-
-
 def verify_license(license_key: str) -> dict | None:
     """
-    验证 License Key
+    验证 License Key (RSA 公钥验签)
 
     Returns:
         成功: {"tier": "lite"|"pro", "machine_id": "...", "created_at": "..."}
@@ -146,10 +129,9 @@ def verify_license(license_key: str) -> dict | None:
         payload_bytes = base64.urlsafe_b64decode(parts[0])
         sig_bytes = base64.urlsafe_b64decode(parts[1])
 
-        # 验证签名
-        expected_sig = _sign(payload_bytes)
-        if not hmac.compare_digest(sig_bytes, expected_sig):
-            return None
+        # RSA 公钥验签
+        pub_key = _load_public_key()
+        rsa.verify(payload_bytes, sig_bytes, pub_key)
 
         payload = json.loads(payload_bytes.decode("utf-8"))
 
@@ -161,7 +143,7 @@ def verify_license(license_key: str) -> dict | None:
 
         return payload
 
-    except Exception:
+    except (rsa.VerificationError, Exception):
         return None
 
 
