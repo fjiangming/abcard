@@ -238,7 +238,9 @@ class AuthFlow:
                 import time
                 time.sleep(wait)
                 continue
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                logger.error(f"CSRF 获取失败: {resp.status_code} - {resp.text[:500]}")
+                raise RuntimeError(f"CSRF 获取失败: {resp.status_code} - {resp.text[:300]}")
             break
 
         csrf = resp.json().get("csrfToken", "")
@@ -263,7 +265,9 @@ class AuthFlow:
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error(f"[2/10] signin 失败: {resp.status_code} - {resp.text[:500]}")
+            raise RuntimeError(f"signin 失败: {resp.status_code} - {resp.text[:300]}")
         auth_url = resp.json().get("url", "")
         if not auth_url:
             raise RuntimeError("Auth URL 获取失败")
@@ -522,7 +526,9 @@ class AuthFlow:
             headers=headers,
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code != 200:
+            logger.error(f"[10/10] session 获取失败: {resp.status_code} - {resp.text[:500]}")
+            raise RuntimeError(f"session 获取失败: {resp.status_code} - {resp.text[:300]}")
 
         session_token = self.session.cookies.get("__Secure-next-auth.session-token", "")
         access_token = resp.json().get("accessToken", "")
