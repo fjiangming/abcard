@@ -2273,6 +2273,7 @@ with col_right:
                 for _idx, _cd in enumerate(_cred_data_list):
                     _email = _cd.get("email", "unknown")
                     _has_rt = bool(_cd.get("refresh_token"))
+                    _has_token = bool(_cd.get("refresh_token") or _cd.get("access_token"))
                     _is_synced = bool(_cd.get("synced_to_newapi"))
                     _row = st.columns([0.6, 2.5, 1.2, 1.2, 1, 1])
                     _row[0].text(str(_idx + 1))
@@ -2284,7 +2285,7 @@ with col_right:
                         if st.button(
                             "已导入" if _is_synced else "导入",
                             key=f"sync_single_{_idx}",
-                            disabled=not _newapi_base or not _newapi_token or not _has_rt or _is_synced,
+                            disabled=not _newapi_base or not _newapi_token or not _has_token or _is_synced,
                         ):
                             with st.spinner(f"导入 {_email}..."):
                                 _sr = _do_newapi_import(
@@ -2305,7 +2306,7 @@ with col_right:
 
             # ── 全部导入 (过滤已同步 + 无 refresh_token) ──
             _syncable = [cd for cd in _cred_data_list
-                         if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
+                         if (cd.get("refresh_token") or cd.get("access_token")) and not cd.get("synced_to_newapi")]
             _sync_col1, _sync_col2 = st.columns([3, 1])
             with _sync_col1:
                 _sync_all_btn = st.button(
@@ -2339,7 +2340,7 @@ with col_right:
                 return buf.getvalue()
 
             _unsynced_creds = [cd for cd in _cred_data_list
-                               if cd.get("refresh_token") and not cd.get("synced_to_newapi")]
+                               if (cd.get("refresh_token") or cd.get("access_token")) and not cd.get("synced_to_newapi")]
             from datetime import datetime as _dt
             _dl_col1, _dl_col2 = st.columns(2)
             with _dl_col1:
