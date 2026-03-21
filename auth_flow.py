@@ -423,7 +423,8 @@ class AuthFlow:
             timeout=30,
         )
         if resp.status_code != 200:
-            raise RuntimeError(f"创建账户失败: {resp.status_code}")
+            logger.error(f"创建账户失败: {resp.status_code} - {resp.text[:500]}")
+            raise RuntimeError(f"创建账户失败: {resp.status_code} - {resp.text[:300]}")
         data = resp.json()
         continue_url = data.get("continue_url", "")
 
