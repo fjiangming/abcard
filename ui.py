@@ -2073,65 +2073,6 @@ with col_right:
         else:
             st.info("暂无执行历史")
 
-        # ── 导出 credentials 为 ZIP ──
-        _export_creds = []
-        if _ENABLE_CODE_SYSTEM:
-            # 兑换码系统启用: 只导出当前兑换码关联的账号
-            for _h in _history:
-                if _h.get("result_json"):
-                    try:
-                        _rd = json.loads(_h["result_json"])
-                        if _rd.get("email") and (_rd.get("access_token") or _rd.get("refresh_token")):
-                            _export_creds.append(_rd)
-                    except Exception:
-                        pass
-        else:
-            # 兑换码系统关闭: 扫描 test_outputs 下全部 credentials 文件
-            _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
-            if os.path.isdir(_cred_dir):
-                for _fn in sorted(os.listdir(_cred_dir)):
-                    if _fn.startswith("credentials_") and _fn.endswith(".json"):
-                        _fpath = os.path.join(_cred_dir, _fn)
-                        try:
-                            with open(_fpath, encoding="utf-8") as _f:
-                                _export_creds.append(json.load(_f))
-                        except Exception:
-                            pass
-
-        _exp_col1, _exp_col2 = st.columns([4, 1])
-        with _exp_col1:
-            if _export_creds:
-                import io
-                import zipfile
-                _zip_buf = io.BytesIO()
-                with zipfile.ZipFile(_zip_buf, "w", zipfile.ZIP_DEFLATED) as _zf:
-                    _seen_emails = {}
-                    for _cd in _export_creds:
-                        _email = _cd.get("email", "unknown")
-                        if _email in _seen_emails:
-                            _seen_emails[_email] += 1
-                            _arc_name = f"{_email}_{_seen_emails[_email]}.json"
-                        else:
-                            _seen_emails[_email] = 0
-                            _arc_name = f"{_email}.json"
-                        # 导出时排除内部字段
-                        _clean = {k: v for k, v in _cd.items() if not k.startswith("_")}
-                        _zf.writestr(_arc_name, json.dumps(_clean, ensure_ascii=False, indent=2))
-                _zip_buf.seek(0)
-                from datetime import datetime as _dt
-                _zip_name = f"credentials_{_dt.now().strftime('%Y%m%d_%H%M%S')}.zip"
-                st.download_button(
-                    f"📦 导出全部 ({len(_export_creds)} 个账号)",
-                    data=_zip_buf.getvalue(),
-                    file_name=_zip_name,
-                    mime="application/zip",
-                    use_container_width=True,
-                )
-            else:
-                st.info("暂无 credentials 可导出")
-        with _exp_col2:
-            if st.button("刷新", key="ref_hist"):
-                st.rerun()
 
 
     # ════════════════════════════════════════
@@ -2339,7 +2280,8 @@ with col_right:
 
             # ── 统计 ──
             _synced_count = sum(1 for cd in _cred_data_list if cd.get("synced_to_newapi"))
-            st.caption(f"共 {len(_cred_data_list)} 个账号，已导入 {_synced_count} 个")
+            _unsynced_count = len(_cred_data_list) - _synced_count
+            st.caption(f"共 {len(_cred_data_list)} 个账号，已导入 {_synced_count} 个，待导入 {_unsynced_count} 个")
 
             # ── 全部导入 (过滤已同步 + 无 refresh_token) ──
             _syncable = [cd for cd in _cred_data_list
@@ -2354,6 +2296,49 @@ with col_right:
             with _sync_col2:
                 if st.button("刷新列表", key="sync_refresh"):
                     st.rerun()
+
+            # ── 导出 credentials 为 ZIP ──
+            def _build_export_zip(cred_list):
+                """将 credentials 列表打包为 ZIP"""
+                import io
+                import zipfile
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                    seen = {}
+                    for cd in cred_list:
+                        email = cd.get("email", "unknown")
+                        if email in seen:
+                            seen[email] += 1
+                            arc = f"{email}_{seen[email]}.json"
+                        else:
+                            seen[email] = 0
+                            arc = f"{email}.json"
+                        clean = {k: v for k, v in cd.items() if not k.startswith("_")}
+                        zf.writestr(arc, json.dumps(clean, ensure_ascii=False, indent=2))
+                buf.seek(0)
+                return buf.getvalue()
+
+            _unsynced_creds = [cd for cd in _cred_data_list if not cd.get("synced_to_newapi")]
+            from datetime import datetime as _dt
+            _dl_col1, _dl_col2 = st.columns(2)
+            with _dl_col1:
+                st.download_button(
+                    f"📦 导出全部 ({len(_cred_data_list)} 个)",
+                    data=_build_export_zip(_cred_data_list),
+                    file_name=f"credentials_all_{_dt.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    disabled=not _cred_data_list,
+                )
+            with _dl_col2:
+                st.download_button(
+                    f"📦 仅导出未同步 ({len(_unsynced_creds)} 个)",
+                    data=_build_export_zip(_unsynced_creds) if _unsynced_creds else b"",
+                    file_name=f"credentials_unsynced_{_dt.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    disabled=not _unsynced_creds,
+                )
 
             if not _newapi_base or not _newapi_token:
                 st.warning("请先配置 API 地址和 Admin Token")
