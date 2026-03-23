@@ -246,11 +246,18 @@ def step4_copy_source():
         for d in [app_dir, data_dir]:
             for f in glob.glob(os.path.join(d, ext)):
                 os.remove(f)
-    # 清理 test_outputs (运行时产生的 credentials 文件)
+    # 清理 test_outputs (运行时产生的 credentials 文件, 保留目录结构)
     test_outputs = os.path.join(app_dir, "test_outputs")
     if os.path.isdir(test_outputs):
-        shutil.rmtree(test_outputs)
-        print("  cleaned test_outputs/")
+        for _f in os.listdir(test_outputs):
+            _fp = os.path.join(test_outputs, _f)
+            if os.path.isfile(_fp):
+                os.remove(_fp)
+        print("  cleaned test_outputs/ (kept directory)")
+    else:
+        os.makedirs(test_outputs, exist_ok=True)
+        print("  created test_outputs/")
+
 
     print("  ✅ 源码复制完成")
 

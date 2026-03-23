@@ -612,7 +612,6 @@ COUNTRY_MAP = {
     "CH - 瑞士": ("CH", "CHF", "Zurich", "Bahnhofstrasse 1", "8001"),
 }
 
-st.set_page_config(page_title="Let's ABC", page_icon="A", layout="wide")
 
 # ── CSS ──
 st.markdown("""
@@ -2158,26 +2157,23 @@ with col_right:
                     except Exception:
                         pass
         else:
-            # 兑换码系统未启用时，回退到扫描 credentials 文件
-            _cred_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), OUTPUT_DIR)
-            if os.path.isdir(_cred_dir):
-                _cred_files = sorted(
-                    [f for f in os.listdir(_cred_dir) if f.startswith("credentials_") and f.endswith(".json")],
-                    reverse=True,
-                )
-                for _cf in _cred_files:
-                    _cf_path = os.path.join(_cred_dir, _cf)
+            # 兑换码系统未启用时，也从 DB 查询 (code="__disabled__")
+            _sync_history = get_code_history("__disabled__")
+            for _h in _sync_history:
+                if _h.get("result_json"):
                     try:
-                        with open(_cf_path, encoding="utf-8") as _f:
-                            _cd = json.load(_f)
-                        _cd["_filename"] = _cf
-                        _cd["_filepath"] = _cf_path
-                        _cred_data_list.append(_cd)
+                        _rd = json.loads(_h["result_json"])
+                        if _rd.get("email") and (_rd.get("access_token") or _rd.get("refresh_token")):
+                            _rd["_exec_id"] = _h["id"]
+                            _cred_data_list.append(_rd)
                     except Exception:
                         pass
 
         if not _cred_data_list:
-            st.info("当前兑换码下暂无可同步的账号。注册成功后自动显示。")
+            if _ENABLE_CODE_SYSTEM:
+                st.info("当前兑换码下暂无可同步的账号。注册成功后自动显示。")
+            else:
+                st.info("暂无可同步的账号。注册成功后自动显示。")
         else:
             # ── 导入函数 (成功后回写 synced 标记) ──
             def _do_newapi_import(cred_list, base_url, admin_token, ch_type, models, group, priority, weight):
