@@ -183,7 +183,32 @@ def main():
                     except Exception:
                         pass
         elif local_synced and not remote_exists:
-            action = "⚠️ 警告: 本地标记已导入但 NewAPI 未找到"
+            status_corrected += 1
+            action = "🔄 更正: 标记为未同步 (NewAPI 已不存在)"
+
+            if not args.dry_run:
+                # 更新 JSON 文件
+                data["synced_to_newapi"] = False
+                with open(fpath, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+
+                # 更新数据库
+                rows = conn.execute(
+                    "SELECT id, result_json FROM executions WHERE email = ? AND result_json IS NOT NULL",
+                    (email,),
+                ).fetchall()
+                for row in rows:
+                    try:
+                        rj = json.loads(row["result_json"])
+                        if rj.get("synced_to_newapi"):
+                            rj["synced_to_newapi"] = False
+                            conn.execute(
+                                "UPDATE executions SET result_json = ?, updated_at = ? WHERE id = ?",
+                                (json.dumps(rj, ensure_ascii=False, default=str),
+                                 datetime.now().isoformat(), row["id"]),
+                            )
+                    except Exception:
+                        pass
         elif local_synced and remote_exists:
             already_synced += 1
             action = "状态正常 (已导入)"
