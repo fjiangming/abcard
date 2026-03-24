@@ -182,17 +182,18 @@ def main():
                             )
                     except Exception:
                         pass
-        elif local_synced and not remote_exists:
-            status_corrected += 1
-            action = "🔄 更正: 标记为未同步 (NewAPI 已不存在)"
+        elif not remote_exists:
+            # NewAPI 不存在该账号 → 确保本地（JSON + 数据库）都标记为未同步
+            db_corrected = False
 
             if not args.dry_run:
-                # 更新 JSON 文件
-                data["synced_to_newapi"] = False
-                with open(fpath, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                # 确保 JSON 文件有显式的 synced_to_newapi = False
+                if data.get("synced_to_newapi") is not False:
+                    data["synced_to_newapi"] = False
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
 
-                # 更新数据库
+                # 检查并更新数据库中所有相关记录
                 rows = conn.execute(
                     "SELECT id, result_json FROM executions WHERE email = ? AND result_json IS NOT NULL",
                     (email,),
@@ -207,8 +208,15 @@ def main():
                                 (json.dumps(rj, ensure_ascii=False, default=str),
                                  datetime.now().isoformat(), row["id"]),
                             )
+                            db_corrected = True
                     except Exception:
                         pass
+
+            if local_synced or db_corrected:
+                status_corrected += 1
+                action = "🔄 更正: 标记为未同步 (NewAPI 已不存在)"
+            else:
+                action = "状态正常 (未同步)"
         elif local_synced and remote_exists:
             already_synced += 1
             action = "状态正常 (已导入)"
@@ -225,7 +233,89 @@ def main():
 
     if not args.dry_run:
         conn.commit()
+
+    # ── 2.5 数据库全量扫描: 确保所有不在 NewAPI 中的记录都标记为未同步 ──
+    # (JSON 文件只有 124 个, 但 DB 可能有数千条记录, 同一 email 可能有多条)
+    print()
+    print("📡 开始数据库全量扫描...")
+
+    # 收集已确认不在 NewAPI 中的 email 集合 (避免重复搜索)
+    emails_not_in_newapi = set()
+    emails_in_newapi = set()
+    for d in details:
+        if d["remote_exists"] is True:
+            emails_in_newapi.add(d["email"])
+        elif d["remote_exists"] is False:
+            emails_not_in_newapi.add(d["email"])
+
+    # 扫描 DB 中所有标记为 synced_to_newapi 的记录
+    db_rows = conn.execute(
+        "SELECT id, email, result_json FROM executions WHERE result_json IS NOT NULL"
+    ).fetchall()
+
+    db_corrected_count = 0
+    db_scanned = 0
+    for row in db_rows:
+        db_scanned += 1
+        try:
+            rj = json.loads(row["result_json"])
+        except Exception:
+            continue
+
+        if not rj.get("synced_to_newapi"):
+            continue  # 已经是 False 或不存在, 无需处理
+
+        row_email = row["email"] or rj.get("email", "")
+        if not row_email:
+            continue
+
+        # 判断该 email 是否在 NewAPI 中
+        if row_email in emails_in_newapi:
+            continue  # 确认在 NewAPI, 不需要更正
+        elif row_email in emails_not_in_newapi:
+            # 已确认不在 NewAPI, 直接更正
+            pass
+        else:
+            # 之前没检查过的 email, 发起 API 查询
+            try:
+                channels = search_channel(base_url, token, row_email)
+                remote_exists = False
+                if channels:
+                    for ch in channels:
+                        if isinstance(ch, dict):
+                            if row_email in ch.get("name", "") or row_email in ch.get("key", ""):
+                                remote_exists = True
+                                break
+                        elif row_email in str(ch):
+                            remote_exists = True
+                            break
+                if remote_exists:
+                    emails_in_newapi.add(row_email)
+                    continue
+                else:
+                    emails_not_in_newapi.add(row_email)
+            except Exception:
+                continue  # 搜索失败, 跳过不更正
+
+        # 更正 DB 记录
+        if not args.dry_run:
+            rj["synced_to_newapi"] = False
+            conn.execute(
+                "UPDATE executions SET result_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(rj, ensure_ascii=False, default=str),
+                 datetime.now().isoformat(), row["id"]),
+            )
+        db_corrected_count += 1
+
+        if db_corrected_count % 50 == 0:
+            print(f"  已更正 {db_corrected_count} 条 DB 记录...")
+
+    if not args.dry_run:
+        conn.commit()
     conn.close()
+
+    print(f"  DB 全量扫描完成: 共扫描 {db_scanned} 条, 更正 {db_corrected_count} 条")
+    status_corrected += db_corrected_count
 
     # ── 3. 生成报告 ──
     report_time = datetime.now().strftime("%Y%m%d_%H%M%S")
